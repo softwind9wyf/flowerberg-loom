@@ -234,10 +234,12 @@ export class ProjectOrchestrator extends EventEmitter {
         goal: project.goal,
         store: this.store,
         agent,
+        config: this.config,
         getPhaseOutput: (p: ProjectPhase) => {
           const ps = this.store.getPhaseState(projectId, p);
           return ps?.output_data ?? null;
         },
+        emit: (e) => this.emitEvent(e),
       };
 
       const handler = PHASE_HANDLERS[phase]();
@@ -266,9 +268,12 @@ export class ProjectOrchestrator extends EventEmitter {
         });
         this.store.addProjectLog(projectId, "orchestrator", "info", `${phase} phase completed`);
 
-        // Handle worktree lifecycle for dev phase
+        // Handle worktree lifecycle
         if (phase === "plan") {
           await this.setupWorktree(projectId);
+        }
+        if (phase === "review") {
+          await this.teardownWorktree(projectId);
         }
 
         // Advance to next phase

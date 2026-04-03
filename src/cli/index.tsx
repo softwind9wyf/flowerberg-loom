@@ -29,12 +29,7 @@ function loadConfig(): AppConfig {
     agents: fileConfig.agents || [{ type: "claude-cli", path: claudePath }],
     max_parallel_agents: fileConfig.max_parallel_agents || 3,
     default_max_retries: fileConfig.default_max_retries || 3,
-    deploy: fileConfig.deploy || {
-      host: "",
-      port: 22,
-      user: "",
-      path: "",
-    },
+    deploy: fileConfig.deploy || {},
   };
 
   return config;

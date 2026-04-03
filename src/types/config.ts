@@ -7,11 +7,18 @@ export interface AgentConfig {
 }
 
 export interface DeployConfig {
-  host: string;
-  port: number;
-  user: string;
-  path: string;
-  ssh_key?: string;
+  /** Git remote to push to (default: "origin") */
+  remote?: string;
+  /** Branch to push (default: current branch) */
+  branch?: string;
+  /** Create a GitHub Release after push (default: true) */
+  createRelease?: boolean;
+  /** Tag prefix for releases (default: "v") */
+  tagPrefix?: string;
+  /** Build command to verify before deploy (default: "npm run build") */
+  buildCommand?: string;
+  /** Whether to verify build before deploying (default: true) */
+  verifyBuild?: boolean;
 }
 
 export interface AppConfig {
