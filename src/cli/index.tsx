@@ -2,13 +2,14 @@ import { Command } from "commander";
 import { resolve } from "path";
 import { homedir } from "os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import type { AppConfig } from "../types.js";
+import type { AppConfig } from "../types/config.js";
 import { Store } from "../store/index.js";
-import { Orchestrator } from "../orchestrator/index.js";
-import { startTUI } from "../tui/index.js";
+import { Orchestrator } from "../orchestrator/legacy.js";
+import { ProjectOrchestrator } from "../orchestrator/project.js";
+import { startProjectTUI, startLegacyTUI } from "../tui/index.js";
 
-const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/flowerberg-devflow/config.json");
-const DEFAULT_DB_PATH = resolve(homedir(), ".config/flowerberg-devflow/devflow.db");
+const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/fbloom/config.json");
+const DEFAULT_DB_PATH = resolve(homedir(), ".config/fbloom/loom.db");
 
 function loadConfig(): AppConfig {
   const configPath = process.env.DEVFLOW_CONFIG || DEFAULT_CONFIG_PATH;
@@ -18,11 +19,15 @@ function loadConfig(): AppConfig {
     fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
   }
 
-  // Auto-detect claude CLI path
-  const claudePath = fileConfig.claude_path || "claude";
+  const claudePath = fileConfig.claude_path || fileConfig.default_agent?.path || "claude";
 
   const config: AppConfig = {
     claude_path: claudePath,
+    default_agent: {
+      type: "claude-cli",
+      path: claudePath,
+    },
+    agents: fileConfig.agents || [{ type: "claude-cli", path: claudePath }],
     max_parallel_agents: fileConfig.max_parallel_agents || 3,
     default_max_retries: fileConfig.default_max_retries || 3,
     deploy: fileConfig.deploy || {
@@ -36,180 +41,279 @@ function loadConfig(): AppConfig {
   return config;
 }
 
-function getStore(): Store {
+function ensureDir(filePath: string): void {
+  const dir = resolve(filePath, "..");
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+
+function createStore(): Store {
   const dbPath = process.env.DEVFLOW_DB || DEFAULT_DB_PATH;
+  ensureDir(dbPath);
   return new Store(dbPath);
 }
 
-function saveConfig(configPath: string, config: Partial<AppConfig>): void {
-  const dir = resolve(configPath, "..");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+export function createProgram(): Command {
+  const program = new Command();
 
-  let existing: Partial<AppConfig> = {};
-  if (existsSync(configPath)) {
-    existing = JSON.parse(readFileSync(configPath, "utf-8"));
-  }
+  program
+    .name("fbloom")
+    .description("flowerberg-loom — AI-powered development lifecycle loom")
+    .version("0.2.0");
 
-  const merged = { ...existing, ...config };
-  writeFileSync(configPath, JSON.stringify(merged, null, 2), "utf-8");
-  console.log(`Config saved to ${configPath}`);
-}
+  // ---- Project commands ----
 
-const program = new Command();
+  program
+    .command("init")
+    .description("Create a new project")
+    .argument("<name>", "Project name")
+    .option("-p, --path <path>", "Project directory", process.cwd())
+    .option("-d, --description <desc>", "Project description", "")
+    .action((name: string, opts: { path: string; description: string }) => {
+      const store = createStore();
+      const config = loadConfig();
+      const orchestrator = new ProjectOrchestrator(config, store);
 
-program
-  .name("devflow")
-  .description("flowerberg-devflow — autonomous AI development pipeline")
-  .version("0.1.0");
-
-// Default: launch TUI dashboard
-program
-  .command("dashboard")
-  .alias("ui")
-  .description("Launch the TUI dashboard (default)")
-  .action(() => {
-    const config = loadConfig();
-    const store = getStore();
-    const orchestrator = new Orchestrator(config, store);
-    startTUI(orchestrator);
-  });
-
-// Submit a new task
-program
-  .command("submit")
-  .description("Submit a new development task")
-  .argument("<description>", "Task description")
-  .option("-p, --project <path>", "Project path", process.cwd())
-  .option("-v, --version <name>", "Version branch name", "main")
-  .option("-t, --title <title>", "Task title (defaults to first 50 chars of description)")
-  .action(async (description: string, opts: { project: string; version: string; title?: string }) => {
-    const config = loadConfig();
-    const store = getStore();
-    const orchestrator = new Orchestrator(config, store);
-
-    const projectPath = resolve(opts.project);
-    const title = opts.title || description.slice(0, 50);
-
-    const task = await orchestrator.submit(title, description, projectPath, opts.version);
-    console.log(`Task submitted: ${task.id}`);
-    console.log(`Title: ${task.title}`);
-    console.log(`Status: ${task.status}`);
-    console.log(`\nRun "devflow status ${task.id}" to check progress.`);
-    console.log(`Run "devflow dashboard" to see all tasks.`);
-  });
-
-// List all tasks
-program
-  .command("list")
-  .alias("ls")
-  .description("List all tasks")
-  .action(() => {
-    const store = getStore();
-    const tasks = store.listTasks();
-
-    if (tasks.length === 0) {
-      console.log("No tasks found.");
-      return;
-    }
-
-    for (const task of tasks) {
-      const subtasks = store.getSubtasks(task.id);
-      const done = subtasks.filter((s) => s.status === "done").length;
-      console.log(
-        `${task.status.padEnd(12)} | ${task.id.slice(0, 8)} | ${task.title}${subtasks.length > 0 ? ` (${done}/${subtasks.length})` : ""}`
-      );
-    }
-  });
-
-// Show task status
-program
-  .command("status")
-  .description("Show detailed task status")
-  .argument("<taskId>", "Task ID")
-  .action((taskId: string) => {
-    const store = getStore();
-    const task = store.getTask(taskId);
-    if (!task) {
-      const tasks = store.listTasks().filter((t) => t.id.startsWith(taskId));
-      if (tasks.length === 1) {
-        return showTaskDetail(store, tasks[0]);
+      try {
+        const project = orchestrator.createProject(name, resolve(opts.path), opts.description);
+        console.log(`Project created: ${project.name} (id: ${project.id})`);
+        console.log(`Path: ${project.project_path}`);
+        console.log(`\nStart with: fbloom start ${project.id}`);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      } finally {
+        store.close();
       }
-      console.error(`Task not found: ${taskId}`);
-      process.exit(1);
-    }
-    showTaskDetail(store, task);
-  });
+    });
 
-function showTaskDetail(store: Store, task: ReturnType<Store["getTask"]>): void {
-  if (!task) return;
-  const subtasks = store.getSubtasks(task.id);
-  const logs = store.getLogs(task.id, 20);
+  program
+    .command("projects")
+    .description("List all projects")
+    .action(() => {
+      const store = createStore();
 
-  console.log(`\nTask: ${task.title}`);
-  console.log(`ID: ${task.id}`);
-  console.log(`Status: ${task.status}`);
-  console.log(`Version: ${task.version}`);
-  console.log(`Project: ${task.project_path}`);
-  console.log(`Created: ${task.created_at}`);
-  if (task.error_message) console.log(`Error: ${task.error_message}`);
+      try {
+        const projects = store.listProjects();
+        if (projects.length === 0) {
+          console.log("No projects yet. Use: fbloom init <name>");
+          return;
+        }
 
-  if (subtasks.length > 0) {
-    console.log("\nSubtasks:");
-    for (const s of subtasks) {
-      console.log(`  ${s.status.padEnd(12)} | [${s.type}] ${s.title}`);
-    }
-  }
+        console.log("Projects:\n");
+        for (const p of projects) {
+          const statusIcon = p.status === "completed" ? "✓" : p.status === "failed" ? "✗" : "●";
+          console.log(`  ${statusIcon} ${p.name} (${p.id.slice(0, 8)})`);
+          console.log(`    Phase: ${p.current_phase} | Status: ${p.status}`);
+          if (p.goal) console.log(`    Goal: ${p.goal.slice(0, 80)}${p.goal.length > 80 ? "..." : ""}`);
+          console.log("");
+        }
+      } finally {
+        store.close();
+      }
+    });
 
-  if (logs.length > 0) {
-    console.log("\nRecent logs:");
-    for (const l of logs.slice(0, 10)) {
-      console.log(`  [${l.level}] ${l.message}`);
-    }
-  }
-}
+  program
+    .command("start")
+    .description("Start or resume a project lifecycle")
+    .argument("<projectId>", "Project ID (or unique prefix)")
+    .action((projectId: string) => {
+      const store = createStore();
+      const config = loadConfig();
+      const orchestrator = new ProjectOrchestrator(config, store);
 
-// Configure settings
-program
-  .command("config")
-  .description("Configure devflow settings")
-  .option("--claude-path <path>", "Set claude CLI path")
-  .option("--deploy-host <host>", "Set deploy host")
-  .option("--deploy-user <user>", "Set deploy user")
-  .option("--deploy-path <path>", "Set deploy path")
-  .action((opts) => {
-    const configPath = process.env.DEVFLOW_CONFIG || DEFAULT_CONFIG_PATH;
-    const updates: Partial<AppConfig> = {};
+      try {
+        // Find project by ID or prefix
+        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
+        if (!project) {
+          console.error(`Project not found: ${projectId}`);
+          process.exit(1);
+        }
 
-    if (opts.claudePath) updates.claude_path = opts.claudePath;
+        console.log(`Starting project: ${project.name}`);
+        console.log(`Phase: ${project.current_phase} | Status: ${project.status}`);
 
-    const deployUpdates: Record<string, string> = {};
-    if (opts.deployHost) deployUpdates.host = opts.deployHost;
-    if (opts.deployUser) deployUpdates.user = opts.deployUser;
-    if (opts.deployPath) deployUpdates.path = opts.deployPath;
-    if (Object.keys(deployUpdates).length > 0) {
-      updates.deploy = deployUpdates as AppConfig["deploy"];
-    }
+        if (!project.goal) {
+          console.log("\nNo goal set. Use: fbloom goal <projectId> <goal>");
+          console.log("Or use the dashboard: fbloom dashboard");
+          return;
+        }
 
-    if (Object.keys(updates).length === 0) {
-      console.log("Current config:");
-      if (existsSync(configPath)) {
-        console.log(readFileSync(configPath, "utf-8"));
+        orchestrator.startProject(project.id);
+        console.log("Project started. Use `fbloom dashboard` to monitor progress.");
+      } finally {
+        // Don't close store — orchestrator is running async
+      }
+    });
+
+  program
+    .command("goal")
+    .description("Set project goal")
+    .argument("<projectId>", "Project ID (or unique prefix)")
+    .argument("<goal>", "Project goal description")
+    .action((projectId: string, goal: string) => {
+      const store = createStore();
+      const config = loadConfig();
+      const orchestrator = new ProjectOrchestrator(config, store);
+
+      try {
+        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
+        if (!project) {
+          console.error(`Project not found: ${projectId}`);
+          process.exit(1);
+        }
+
+        orchestrator.setGoal(project.id, goal);
+        console.log(`Goal set for project ${project.name}`);
+      } finally {
+        store.close();
+      }
+    });
+
+  program
+    .command("input")
+    .description("Provide human input for the current phase")
+    .argument("<projectId>", "Project ID (or unique prefix)")
+    .argument("<value>", "Input value")
+    .action((projectId: string, value: string) => {
+      const store = createStore();
+      const config = loadConfig();
+      const orchestrator = new ProjectOrchestrator(config, store);
+
+      try {
+        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
+        if (!project) {
+          console.error(`Project not found: ${projectId}`);
+          process.exit(1);
+        }
+
+        orchestrator.provideInput(project.id, value);
+        console.log(`Input provided for project ${project.name}`);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      } finally {
+        store.close();
+      }
+    });
+
+  program
+    .command("status")
+    .description("Show project status")
+    .argument("<projectId>", "Project ID (or unique prefix)")
+    .action((projectId: string) => {
+      const store = createStore();
+
+      try {
+        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
+        if (!project) {
+          console.error(`Project not found: ${projectId}`);
+          process.exit(1);
+        }
+
+        const phaseStates = store.getAllPhaseStates(project.id);
+        const spec = store.getLatestSpec(project.id);
+        const planSteps = store.getPlanSteps(project.id);
+
+        console.log(`\nProject: ${project.name} (${project.id})`);
+        console.log(`Status: ${project.status} | Current Phase: ${project.current_phase}`);
+        if (project.goal) console.log(`Goal: ${project.goal}`);
+
+        console.log("\nPhases:");
+        for (const ps of phaseStates) {
+          const icon = ps.status === "done" ? "✓" : ps.status === "failed" ? "✗" : ps.status === "in_progress" ? "▶" : ps.status === "waiting_input" ? "⏸" : "○";
+          console.log(`  ${icon} ${ps.phase}: ${ps.status}`);
+        }
+
+        if (spec) {
+          console.log(`\nSpec: version ${spec.version} (${spec.status})`);
+        }
+
+        if (planSteps.length > 0) {
+          const done = planSteps.filter((s) => s.status === "done").length;
+          console.log(`\nPlan: ${done}/${planSteps.length} steps completed`);
+          for (const step of planSteps) {
+            const icon = step.status === "done" ? "✓" : step.status === "failed" ? "✗" : step.status === "in_progress" ? "▶" : "○";
+            console.log(`  ${icon} [${step.phase}] ${step.title}`);
+          }
+        }
+      } finally {
+        store.close();
+      }
+    });
+
+  // ---- Dashboard (TUI) ----
+
+  program
+    .command("dashboard")
+    .description("Open interactive TUI dashboard")
+    .option("--legacy", "Use legacy task dashboard")
+    .action((opts: { legacy?: boolean }) => {
+      const store = createStore();
+      const config = loadConfig();
+
+      if (opts.legacy) {
+        const orchestrator = new Orchestrator(config, store);
+        startLegacyTUI(orchestrator);
       } else {
-        console.log("(no config file found)");
-        console.log(`\nConfig path: ${configPath}`);
-        console.log("\nDefaults:");
-        console.log(`  claude_path: claude`);
-        console.log(`  Model: uses Claude Code's default (from env)`);
+        const orchestrator = new ProjectOrchestrator(config, store);
+        startProjectTUI(orchestrator);
       }
-      return;
-    }
+    });
 
-    saveConfig(configPath, updates);
-  });
+  // ---- Legacy task commands (backward compat) ----
 
-// Default action: show help if no command
-program.action(() => {
-  program.help();
-});
+  program
+    .command("submit")
+    .description("Submit a task (legacy mode)")
+    .argument("<description>", "Task description")
+    .option("-t, --title <title>", "Task title", "Untitled Task")
+    .option("-p, --path <path>", "Project path", process.cwd())
+    .option("-v, --version <branch>", "Version branch", "main")
+    .action(async (description: string, opts: { title: string; path: string; version: string }) => {
+      const store = createStore();
+      const config = loadConfig();
+      const orchestrator = new Orchestrator(config, store);
 
-program.parse();
+      const task = await orchestrator.submit(opts.title, description, resolve(opts.path), opts.version);
+      console.log(`Task submitted: ${task.id}`);
+      console.log("Use `fbloom dashboard --legacy` to monitor progress.");
+    });
+
+  // ---- Config ----
+
+  program
+    .command("config")
+    .description("Show or edit configuration")
+    .option("--show", "Show current config")
+    .option("--set-agent <type>", "Set default agent type")
+    .option("--set-path <path>", "Set default agent path")
+    .action((opts: { show?: boolean; setAgent?: string; setPath?: string }) => {
+      if (opts.show || (!opts.setAgent && !opts.setPath)) {
+        const config = loadConfig();
+        console.log(JSON.stringify(config, null, 2));
+        return;
+      }
+
+      const configPath = process.env.DEVFLOW_CONFIG || DEFAULT_CONFIG_PATH;
+      let config: AppConfig = loadConfig();
+
+      if (opts.setAgent) {
+        config.default_agent.type = opts.setAgent as AppConfig["default_agent"]["type"];
+      }
+      if (opts.setPath) {
+        config.default_agent.path = opts.setPath;
+        config.claude_path = opts.setPath;
+      }
+
+      ensureDir(configPath);
+      writeFileSync(configPath, JSON.stringify(config, null, 2));
+      console.log(`Config saved to ${configPath}`);
+    });
+
+  return program;
+}
+
+// Always run — this is the CLI entry point
+createProgram().parse();

@@ -1,10 +1,10 @@
 {
-  "name": "flowerberg-devflow",
-  "version": "0.1.0",
-  "description": "Autonomous AI-powered development pipeline with TUI dashboard",
+  "name": "flowerberg-loom",
+  "version": "0.2.0",
+  "description": "AI-powered development lifecycle loom — weave goals into shipped software",
   "main": "dist/cli/index.js",
   "bin": {
-    "devflow": "dist/cli/index.js"
+    "fbloom": "dist/cli/index.js"
   },
   "scripts": {
     "build": "tsup",

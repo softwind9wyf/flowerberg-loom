@@ -1,55 +1,62 @@
-export type TaskStatus =
-  | "pending"
-  | "decomposing"
-  | "coding"
-  | "testing"
-  | "reviewing"
-  | "deploying"
-  | "done"
-  | "failed";
+// Backward-compatible re-exports from new type modules
+// Existing code importing from "../types.js" will continue to work
 
-export type SubtaskType = "code" | "test" | "review" | "deploy";
+// Legacy task types
+export type {
+  TaskStatus,
+  SubtaskType,
+  Task,
+  Subtask,
+  LogEntry,
+} from "./types/task.js";
 
-export interface Task {
-  id: string;
-  title: string;
-  description: string;
-  status: TaskStatus;
-  version: string;
-  project_path: string;
-  parent_task_id: string | null;
-  created_at: string;
-  updated_at: string;
-  error_message: string | null;
-  retry_count: number;
-  max_retries: number;
-}
+// Project types
+export type {
+  ProjectPhase,
+  ProjectStatus,
+  PhaseInteraction,
+  Project,
+  PhaseStateStatus,
+  PhaseState,
+} from "./types/project.js";
 
-export interface Subtask {
-  id: string;
-  task_id: string;
-  type: SubtaskType;
-  title: string;
-  description: string;
-  status: TaskStatus;
-  assigned_agent: string | null;
-  result: string | null;
-  depends_on: string[];
-  created_at: string;
-  updated_at: string;
-  error_message: string | null;
-}
+export {
+  PHASE_ORDER,
+  PHASE_INTERACTION,
+} from "./types/project.js";
 
-export interface LogEntry {
-  id: string;
-  task_id: string;
-  subtask_id: string | null;
-  agent: string;
-  level: "info" | "warn" | "error" | "debug";
-  message: string;
-  created_at: string;
-}
+// Spec types
+export type {
+  SpecDocument,
+  SpecStatus,
+} from "./types/spec.js";
 
+// Plan types
+export type {
+  PlanStepStatus,
+  PlanStep,
+} from "./types/plan.js";
+
+// Agent types
+export type {
+  AgentType,
+  AgentRunOptions,
+  AgentResult,
+  AgentInterface,
+} from "./types/agent.js";
+
+// Config types
+export type {
+  AgentConfig,
+  AppConfig,
+} from "./types/config.js";
+
+// Event types
+export type {
+  ProjectEvent,
+} from "./types/events.js";
+
+// Version type (legacy, kept here for store compat)
 export interface Version {
   id: string;
   name: string;
@@ -58,23 +65,4 @@ export interface Version {
   base_branch: string;
   status: "active" | "merged" | "abandoned";
   created_at: string;
-}
-
-export interface AgentResult {
-  success: boolean;
-  output: string;
-  error?: string;
-}
-
-export interface AppConfig {
-  claude_path: string;
-  max_parallel_agents: number;
-  default_max_retries: number;
-  deploy: {
-    host: string;
-    port: number;
-    user: string;
-    path: string;
-    ssh_key?: string;
-  };
 }

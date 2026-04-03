@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text, useInput, useApp, render } from "ink";
+import type { Project, ProjectStatus } from "../types/project.js";
 import type { Task, Subtask, LogEntry, TaskStatus } from "../types.js";
-import type { Orchestrator, OrchestratorEvent } from "../orchestrator/index.js";
+import type { Orchestrator as LegacyOrchestrator, OrchestratorEvent } from "../orchestrator/index.js";
+import type { ProjectOrchestrator } from "../orchestrator/project.js";
+import { App } from "./components/App.js";
+
+// ---- Legacy TUI (kept for `fbloom submit` compat) ----
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
   pending: "yellow",
@@ -33,15 +38,7 @@ function StatusBadge({ status }: { status: TaskStatus }) {
   );
 }
 
-function TaskCard({
-  task,
-  subtasks,
-  isSelected,
-}: {
-  task: Task;
-  subtasks: Subtask[];
-  isSelected: boolean;
-}) {
+function TaskCard({ task, subtasks, isSelected }: { task: Task; subtasks: Subtask[]; isSelected: boolean }) {
   const done = subtasks.filter((s) => s.status === "done").length;
   const total = subtasks.length;
   const barWidth = 20;
@@ -49,17 +46,9 @@ function TaskCard({
   const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle={isSelected ? "double" : "round"}
-      borderColor={isSelected ? "cyan" : "gray"}
-      paddingX={1}
-      marginBottom={1}
-    >
+    <Box flexDirection="column" borderStyle={isSelected ? "double" : "round"} borderColor={isSelected ? "cyan" : "gray"} paddingX={1} marginTop={1}>
       <Box>
-        <Text bold color="white">
-          {task.title}
-        </Text>
+        <Text bold color="white">{task.title}</Text>
         <Text> </Text>
         <StatusBadge status={task.status} />
       </Box>
@@ -69,100 +58,14 @@ function TaskCard({
           <Text dimColor>[</Text>
           <Text color="green">{bar}</Text>
           <Text dimColor>] </Text>
-          <Text>
-            {done}/{total} subtasks
-          </Text>
+          <Text>{done}/{total} subtasks</Text>
         </Box>
       )}
-      <Text dimColor>
-        v:{task.version} | {new Date(task.created_at).toLocaleString()}
-      </Text>
     </Box>
   );
 }
 
-function TaskDetail({
-  task,
-  subtasks,
-  logs,
-  onBack,
-}: {
-  task: Task;
-  subtasks: Subtask[];
-  logs: LogEntry[];
-  onBack: () => void;
-}) {
-  useInput((input) => {
-    if (input === "q" || input === "Escape") onBack();
-  });
-
-  return (
-    <Box flexDirection="column" padding={1}>
-      <Box marginBottom={1}>
-        <Text bold color="cyan">
-          📋 {task.title}
-        </Text>
-        <Text> </Text>
-        <StatusBadge status={task.status} />
-      </Box>
-
-      <Text dimColor marginBottom={1}>
-        {task.description}
-      </Text>
-
-      <Box flexDirection="column" marginBottom={1}>
-        <Text bold underline>
-          Subtasks
-        </Text>
-        {subtasks.map((s) => (
-          <Box key={s.id} marginLeft={1}>
-            <StatusBadge status={s.status} />
-            <Text>
-              {" "}
-              [{s.type}] {s.title}
-            </Text>
-          </Box>
-        ))}
-        {subtasks.length === 0 && (
-          <Text dimColor marginLeft={1}>
-            No subtasks yet
-          </Text>
-        )}
-      </Box>
-
-      <Box flexDirection="column">
-        <Text bold underline>
-          Recent Logs
-        </Text>
-        {logs.slice(0, 15).map((log) => (
-          <Box key={log.id} marginLeft={1}>
-            <Text dimColor>
-              {new Date(log.created_at).toLocaleTimeString()}
-            </Text>
-            <Text
-              color={
-                log.level === "error"
-                  ? "red"
-                  : log.level === "warn"
-                    ? "yellow"
-                    : "white"
-              }
-            >
-              {" "}
-              {log.message}
-            </Text>
-          </Box>
-        ))}
-      </Box>
-
-      <Box marginTop={1}>
-        <Text dimColor>Press q to go back</Text>
-      </Box>
-    </Box>
-  );
-}
-
-function Dashboard({ orchestrator }: { orchestrator: Orchestrator }) {
+function LegacyDashboard({ orchestrator }: { orchestrator: LegacyOrchestrator }) {
   const { exit } = useApp();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -171,7 +74,6 @@ function Dashboard({ orchestrator }: { orchestrator: Orchestrator }) {
   const [detailLogs, setDetailLogs] = useState<LogEntry[]>([]);
   const [liveLogs, setLiveLogs] = useState<{ taskId: string; msg: string }[]>([]);
 
-  // Poll task list
   useEffect(() => {
     const refresh = () => setTasks(orchestrator.listTasks());
     refresh();
@@ -179,7 +81,6 @@ function Dashboard({ orchestrator }: { orchestrator: Orchestrator }) {
     return () => clearInterval(interval);
   }, [orchestrator]);
 
-  // Listen to events for live logs
   useEffect(() => {
     const handler = (event: OrchestratorEvent) => {
       if (event.type === "log") {
@@ -193,7 +94,6 @@ function Dashboard({ orchestrator }: { orchestrator: Orchestrator }) {
     return () => { orchestrator.off("event", handler); };
   }, [orchestrator]);
 
-  // Refresh detail view
   useEffect(() => {
     if (!detailTaskId) return;
     const refresh = () => {
@@ -209,21 +109,15 @@ function Dashboard({ orchestrator }: { orchestrator: Orchestrator }) {
   }, [detailTaskId, orchestrator]);
 
   useInput((input) => {
-    if (detailTaskId) return; // handled by TaskDetail
+    if (detailTaskId) {
+      if (input === "q" || "Escape") setDetailTaskId(null);
+      return;
+    }
     switch (input) {
-      case "q":
-        exit();
-        break;
-      case "j":
-      case "down":
-        setSelectedIdx((i) => Math.min(i + 1, tasks.length - 1));
-        break;
-      case "k":
-      case "up":
-        setSelectedIdx((i) => Math.max(i - 1, 0));
-        break;
-      case "d":
-      case "Enter":
+      case "q": exit(); break;
+      case "j": case "down": setSelectedIdx((i) => Math.min(i + 1, tasks.length - 1)); break;
+      case "k": case "up": setSelectedIdx((i) => Math.max(i - 1, 0)); break;
+      case "d": case "Enter":
         if (tasks[selectedIdx]) setDetailTaskId(tasks[selectedIdx].id);
         break;
     }
@@ -233,59 +127,72 @@ function Dashboard({ orchestrator }: { orchestrator: Orchestrator }) {
     const task = tasks.find((t) => t.id === detailTaskId);
     if (!task) return <Text>Task not found</Text>;
     return (
-      <TaskDetail
-        task={task}
-        subtasks={detailSubtasks}
-        logs={detailLogs}
-        onBack={() => setDetailTaskId(null)}
-      />
+      <Box flexDirection="column" padding={1}>
+        <Box marginTop={1}>
+          <Text bold color="cyan">{task.title}</Text>
+          <Text> </Text>
+          <StatusBadge status={task.status} />
+        </Box>
+        <Box marginTop={1} flexDirection="column">
+          <Text bold underline>Subtasks</Text>
+          {detailSubtasks.map((s) => (
+            <Box key={s.id} marginLeft={1}>
+              <StatusBadge status={s.status} />
+              <Text> [{s.type}] {s.title}</Text>
+            </Box>
+          ))}
+        </Box>
+        <Box marginTop={1} flexDirection="column">
+          <Text bold underline>Recent Logs</Text>
+          {detailLogs.slice(0, 15).map((log) => (
+            <Box key={log.id} marginLeft={1}>
+              <Text dimColor>{new Date(log.created_at).toLocaleTimeString()}</Text>
+              <Text color={log.level === "error" ? "red" : "white"}> {log.message}</Text>
+            </Box>
+          ))}
+        </Box>
+        <Box marginTop={1}><Text dimColor>Press q to go back</Text></Box>
+      </Box>
     );
   }
 
   return (
     <Box flexDirection="column" padding={1}>
-      <Box borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={1}>
-        <Text bold color="cyan">
-          flowerberg-devflow
-        </Text>
-        <Text dimColor> — autonomous dev pipeline</Text>
+      <Box borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1}>
+        <Text bold color="cyan">flowerberg-loom</Text>
+        <Text dimColor> — dev loom (legacy)</Text>
       </Box>
-
       {tasks.length === 0 ? (
-        <Text dimColor>No tasks yet. Use: devflow submit "your task description"</Text>
+        <Text dimColor>No tasks yet. Use: fbloom submit "your task description"</Text>
       ) : (
         tasks.map((task, idx) => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            subtasks={orchestrator.getStatus(task.id)?.subtasks ?? []}
-            isSelected={idx === selectedIdx}
-          />
+          <TaskCard key={task.id} task={task} subtasks={orchestrator.getStatus(task.id)?.subtasks ?? []} isSelected={idx === selectedIdx} />
         ))
       )}
-
       {liveLogs.length > 0 && (
         <Box flexDirection="column" marginTop={1} borderStyle="round" borderColor="dim" paddingX={1}>
-          <Text dimColor underline>
-            Live
-          </Text>
-          {liveLogs.map((l, i) => (
-            <Text key={i} dimColor>
-              {l.msg}
-            </Text>
-          ))}
+          <Text dimColor underline>Live</Text>
+          {liveLogs.map((l, i) => <Text key={i} dimColor>{l.msg}</Text>)}
         </Box>
       )}
-
-      <Box marginTop={1}>
-        <Text dimColor>
-          j/k: navigate | d: detail | q: quit
-        </Text>
-      </Box>
+      <Box marginTop={1}><Text dimColor>j/k: navigate | d: detail | q: quit</Text></Box>
     </Box>
   );
 }
 
-export function startTUI(orchestrator: Orchestrator): void {
-  render(<Dashboard orchestrator={orchestrator} />);
+// ---- Public API ----
+
+/** Start the new project-based TUI */
+export function startProjectTUI(orchestrator: ProjectOrchestrator): void {
+  render(<App orchestrator={orchestrator} />);
+}
+
+/** Start the legacy task-based TUI */
+export function startLegacyTUI(orchestrator: LegacyOrchestrator): void {
+  render(<LegacyDashboard orchestrator={orchestrator} />);
+}
+
+/** Backward compat: startTUI uses legacy dashboard */
+export function startTUI(orchestrator: LegacyOrchestrator): void {
+  startLegacyTUI(orchestrator);
 }
