@@ -282,8 +282,7 @@ export class Store {
 
     if (!existing) return;
 
-    const updates: string[] = ["status = ?", "updated_at = ?"];
-    // we don't have updated_at in phase_states, use started_at / completed_at
+    const updates: string[] = ["status = ?"];
     const values: unknown[] = [status];
 
     if (status === "in_progress" && !existing.started_at) {
