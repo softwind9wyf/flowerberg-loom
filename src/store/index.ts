@@ -2,8 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import type { Task, Subtask, LogEntry, TaskStatus } from "../types/task.js";
-import type { Project, ProjectPhase, ProjectStatus, PhaseState, PhaseStateStatus } from "../types/project.js";
+import type { Project, ProjectPhase, PhaseState, PhaseStateStatus } from "../types/project.js";
 import type { SpecDocument, SpecStatus } from "../types/spec.js";
 import type { PlanStep, PlanStepStatus } from "../types/plan.js";
 
@@ -14,56 +13,6 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO schema_version (rowid, version) VALUES (1, 0);
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  version TEXT NOT NULL DEFAULT 'main',
-  project_path TEXT NOT NULL,
-  parent_task_id TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  error_message TEXT,
-  retry_count INTEGER NOT NULL DEFAULT 0,
-  max_retries INTEGER NOT NULL DEFAULT 3
-);
-
-CREATE TABLE IF NOT EXISTS subtasks (
-  id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  type TEXT NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  assigned_agent TEXT,
-  result TEXT,
-  depends_on TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  error_message TEXT
-);
-
-CREATE TABLE IF NOT EXISTS logs (
-  id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  subtask_id TEXT,
-  agent TEXT NOT NULL,
-  level TEXT NOT NULL DEFAULT 'info',
-  message TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS versions (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  branch TEXT NOT NULL,
-  worktree_path TEXT,
-  base_branch TEXT NOT NULL DEFAULT 'main',
-  status TEXT NOT NULL DEFAULT 'active',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
 `;
 
 const MIGRATION_002 = `
@@ -121,15 +70,12 @@ CREATE TABLE IF NOT EXISTS plan_steps (
   started_at TEXT,
   completed_at TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_plan_steps_project ON plan_steps(project_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_phase_states_project ON phase_states(project_id);
 `;
 
-// Add columns to existing tables (safe in SQLite — ALTER TABLE ADD COLUMN is supported)
 const MIGRATION_003 = `
--- Use try-catch approach via exec since ALTER TABLE ADD COLUMN may fail if column exists
--- We handle this by checking column existence first in JS code
-`;
-
-const MIGRATION_004 = `
 CREATE TABLE IF NOT EXISTS project_logs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -142,28 +88,10 @@ CREATE TABLE IF NOT EXISTS project_logs (
 CREATE INDEX IF NOT EXISTS idx_project_logs_project ON project_logs(project_id, created_at DESC);
 `;
 
-const MIGRATIONS: { version: number; sql: string; postSql?: (db: Database.Database) => void }[] = [
+const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: MIGRATION_001 },
   { version: 2, sql: MIGRATION_002 },
-  {
-    version: 3,
-    sql: MIGRATION_003,
-    postSql: (db) => {
-      const taskCols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
-      const colNames = taskCols.map((c) => c.name);
-      if (!colNames.includes("project_id")) {
-        db.exec("ALTER TABLE tasks ADD COLUMN project_id TEXT REFERENCES projects(id)");
-      }
-      if (!colNames.includes("plan_step_id")) {
-        db.exec("ALTER TABLE tasks ADD COLUMN plan_step_id TEXT REFERENCES plan_steps(id)");
-      }
-
-      db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)");
-      db.exec("CREATE INDEX IF NOT EXISTS idx_plan_steps_project ON plan_steps(project_id, sequence)");
-      db.exec("CREATE INDEX IF NOT EXISTS idx_phase_states_project ON phase_states(project_id)");
-    },
-  },
-  { version: 4, sql: MIGRATION_004 },
+  { version: 3, sql: MIGRATION_003 },
 ];
 
 export class Store {
@@ -183,9 +111,6 @@ export class Store {
   private runMigrations(): void {
     for (const migration of MIGRATIONS) {
       this.db.exec(migration.sql);
-      if (migration.postSql) {
-        migration.postSql(this.db);
-      }
       this.db.prepare("UPDATE schema_version SET version = ? WHERE rowid = 1").run(migration.version);
     }
   }
@@ -452,92 +377,9 @@ export class Store {
     });
   }
 
-  // --- Tasks (legacy, kept for backward compat) ---
+  // --- Project Logs ---
 
-  createTask(task: Omit<Task, "id" | "created_at" | "updated_at" | "retry_count" | "project_id" | "plan_step_id" | "error_message"> & { project_id?: string | null; plan_step_id?: string | null }): Task {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
-      INSERT INTO tasks (id, title, description, status, version, project_path, parent_task_id, max_retries, project_id, plan_step_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(id, task.title, task.description, task.status, task.version, task.project_path,
-      task.parent_task_id, task.max_retries, task.project_id ?? null, task.plan_step_id ?? null);
-    return { ...task, id, created_at: now, updated_at: now, retry_count: 0, project_id: task.project_id ?? null, plan_step_id: task.plan_step_id ?? null, error_message: null } as Task;
-  }
-
-  getTask(id: string): Task | undefined {
-    return this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Task | undefined;
-  }
-
-  listTasks(): Task[] {
-    return this.db.prepare("SELECT * FROM tasks ORDER BY created_at DESC").all() as Task[];
-  }
-
-  updateTaskStatus(id: string, status: TaskStatus, errorMessage?: string): void {
-    const now = new Date().toISOString();
-    this.db.prepare(`
-      UPDATE tasks SET status = ?, updated_at = ?, error_message = ? WHERE id = ?
-    `).run(status, now, errorMessage ?? null, id);
-  }
-
-  incrementRetry(id: string): number {
-    this.db.prepare(`
-      UPDATE tasks SET retry_count = retry_count + 1, updated_at = ? WHERE id = ?
-    `).run(new Date().toISOString(), id);
-    const task = this.getTask(id);
-    return task?.retry_count ?? 0;
-  }
-
-  // --- Subtasks (legacy, kept for backward compat) ---
-
-  createSubtask(subtask: Omit<Subtask, "id" | "created_at" | "updated_at" | "error_message">): Subtask {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
-      INSERT INTO subtasks (id, task_id, type, title, description, status, assigned_agent, result, depends_on)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(id, subtask.task_id, subtask.type, subtask.title, subtask.description,
-      subtask.status, subtask.assigned_agent, subtask.result, JSON.stringify(subtask.depends_on));
-    return { ...subtask, id, created_at: now, updated_at: now, error_message: null } as Subtask;
-  }
-
-  getSubtasks(taskId: string): Subtask[] {
-    return this.db.prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY created_at").all(taskId) as Subtask[];
-  }
-
-  updateSubtaskStatus(id: string, status: TaskStatus, result?: string, errorMessage?: string): void {
-    const now = new Date().toISOString();
-    this.db.prepare(`
-      UPDATE subtasks SET status = ?, updated_at = ?, result = ?, error_message = ? WHERE id = ?
-    `).run(status, now, result ?? null, errorMessage ?? null, id);
-  }
-
-  getReadySubtasks(taskId: string): Subtask[] {
-    const subtasks = this.getSubtasks(taskId);
-    return subtasks.filter((s) => {
-      if (s.status !== "pending") return false;
-      const deps: string[] = JSON.parse(s.depends_on as unknown as string);
-      if (deps.length === 0) return true;
-      return deps.every((depId) => {
-        const dep = subtasks.find((x) => x.id === depId);
-        return dep?.status === "done";
-      });
-    });
-  }
-
-  // --- Logs ---
-
-  addLog(taskId: string, agent: string, level: LogEntry["level"], message: string, subtaskId?: string): void {
-    const id = randomUUID();
-    this.db.prepare(`
-      INSERT INTO logs (id, task_id, subtask_id, agent, level, message)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, taskId, subtaskId ?? null, agent, level, message);
-  }
-
-  addProjectLog(projectId: string, agent: string, level: LogEntry["level"], message: string, phase?: string): void {
+  addProjectLog(projectId: string, agent: string, level: "info" | "warn" | "error" | "debug", message: string, phase?: string): void {
     const id = randomUUID();
     this.db.prepare(`
       INSERT INTO project_logs (id, project_id, phase, agent, level, message)
@@ -549,31 +391,6 @@ export class Store {
     return this.db.prepare(
       "SELECT * FROM project_logs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?"
     ).all(projectId, limit) as Array<{ id: string; project_id: string; phase: string | null; agent: string; level: string; message: string; created_at: string }>;
-  }
-
-  getLogs(taskId: string, limit = 100): LogEntry[] {
-    return this.db.prepare(
-      "SELECT * FROM logs WHERE task_id = ? ORDER BY created_at DESC LIMIT ?"
-    ).all(taskId, limit) as LogEntry[];
-  }
-
-  // --- Versions ---
-
-  createVersion(version: Omit<import("../types/task.js").Version, "id" | "created_at">): import("../types/task.js").Version {
-    const id = randomUUID();
-    this.db.prepare(`
-      INSERT INTO versions (id, name, branch, worktree_path, base_branch, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, version.name, version.branch, version.worktree_path, version.base_branch, version.status);
-    return { ...version, id, created_at: new Date().toISOString() };
-  }
-
-  listVersions(): import("../types/task.js").Version[] {
-    return this.db.prepare("SELECT * FROM versions ORDER BY created_at DESC").all() as import("../types/task.js").Version[];
-  }
-
-  updateVersionStatus(id: string, status: import("../types/task.js").Version["status"]): void {
-    this.db.prepare("UPDATE versions SET status = ? WHERE id = ?").run(status, id);
   }
 
   close(): void {

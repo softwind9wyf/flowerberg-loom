@@ -1,15 +1,6 @@
 // Backward-compatible re-exports from new type modules
 // Existing code importing from "../types.js" will continue to work
 
-// Legacy task types
-export type {
-  TaskStatus,
-  SubtaskType,
-  Task,
-  Subtask,
-  LogEntry,
-} from "./types/task.js";
-
 // Project types
 export type {
   ProjectPhase,
@@ -55,14 +46,3 @@ export type {
 export type {
   ProjectEvent,
 } from "./types/events.js";
-
-// Version type (legacy, kept here for store compat)
-export interface Version {
-  id: string;
-  name: string;
-  branch: string;
-  worktree_path: string;
-  base_branch: string;
-  status: "active" | "merged" | "abandoned";
-  created_at: string;
-}

@@ -249,101 +249,7 @@ describe("Store", () => {
     });
   });
 
-  // --- Legacy Tasks ---
-
-  describe("createTask / getTask / listTasks", () => {
-    it("creates and retrieves a task", () => {
-      const task = store.createTask({
-        title: "My task",
-        description: "Do something",
-        status: "pending",
-        version: "main",
-        project_path: "/tmp",
-        parent_task_id: null,
-        max_retries: 3,
-      });
-      expect(task.retry_count).toBe(0);
-
-      const retrieved = store.getTask(task.id);
-      expect(retrieved!.title).toBe("My task");
-
-      expect(store.listTasks()).toHaveLength(1);
-    });
-  });
-
-  describe("updateTaskStatus / incrementRetry", () => {
-    it("updates task status and error", () => {
-      const task = store.createTask({
-        title: "t", description: "", status: "pending",
-        version: "main", project_path: "/tmp", parent_task_id: null, max_retries: 3,
-      });
-      store.updateTaskStatus(task.id, "failed", "something broke");
-      const updated = store.getTask(task.id);
-      expect(updated!.status).toBe("failed");
-      expect(updated!.error_message).toBe("something broke");
-    });
-
-    it("increments retry count", () => {
-      const task = store.createTask({
-        title: "retry", description: "", status: "pending",
-        version: "main", project_path: "/tmp", parent_task_id: null, max_retries: 3,
-      });
-      const count = store.incrementRetry(task.id);
-      expect(count).toBe(1);
-      expect(store.getTask(task.id)!.retry_count).toBe(1);
-    });
-  });
-
-  // --- Legacy Subtasks ---
-
-  describe("createSubtask / getSubtasks / getReadySubtasks", () => {
-    it("manages subtasks with dependency resolution", () => {
-      const task = store.createTask({
-        title: "parent", description: "", status: "pending",
-        version: "main", project_path: "/tmp", parent_task_id: null, max_retries: 3,
-      });
-
-      const sub1 = store.createSubtask({
-        task_id: task.id, type: "code", title: "sub1", description: "",
-        status: "pending", assigned_agent: null, result: null, depends_on: [],
-      });
-      const sub2 = store.createSubtask({
-        task_id: task.id, type: "test", title: "sub2", description: "",
-        status: "pending", assigned_agent: null, result: null, depends_on: [sub1.id],
-      });
-
-      expect(store.getSubtasks(task.id)).toHaveLength(2);
-
-      // sub1 ready, sub2 blocked
-      const ready = store.getReadySubtasks(task.id);
-      expect(ready).toHaveLength(1);
-      expect(ready[0].id).toBe(sub1.id);
-
-      // complete sub1 → sub2 ready
-      store.updateSubtaskStatus(sub1.id, "done", "ok");
-      expect(store.getReadySubtasks(task.id)).toHaveLength(1);
-      expect(store.getReadySubtasks(task.id)[0].id).toBe(sub2.id);
-    });
-  });
-
-  // --- Logs ---
-
-  describe("addLog / getLogs", () => {
-    it("stores and retrieves task logs", () => {
-      const task = store.createTask({
-        title: "log", description: "", status: "pending",
-        version: "main", project_path: "/tmp", parent_task_id: null, max_retries: 3,
-      });
-      store.addLog(task.id, "agent-1", "info", "started work");
-      store.addLog(task.id, "agent-1", "error", "something failed", "sub-1");
-
-      const logs = store.getLogs(task.id);
-      expect(logs).toHaveLength(2);
-      const messages = logs.map((l) => l.message);
-      expect(messages).toContain("started work");
-      expect(messages).toContain("something failed");
-    });
-  });
+  // --- Project Logs ---
 
   describe("addProjectLog / getProjectLogs", () => {
     it("stores and retrieves project logs", () => {
@@ -364,21 +270,6 @@ describe("Store", () => {
         store.addProjectLog(p.id, "a", "info", `msg ${i}`);
       }
       expect(store.getProjectLogs(p.id, 3)).toHaveLength(3);
-    });
-  });
-
-  // --- Versions ---
-
-  describe("createVersion / listVersions / updateVersionStatus", () => {
-    it("manages versions", () => {
-      const v = store.createVersion({
-        name: "v1", branch: "main", worktree_path: "/tmp/wt", base_branch: "main", status: "active",
-      });
-      expect(v.name).toBe("v1");
-      expect(store.listVersions()).toHaveLength(1);
-
-      store.updateVersionStatus(v.id, "merged");
-      expect(store.listVersions()[0].status).toBe("merged");
     });
   });
 });

@@ -4,9 +4,8 @@ import { homedir } from "os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import type { AppConfig } from "../types/config.js";
 import { Store } from "../store/index.js";
-import { Orchestrator } from "../orchestrator/legacy.js";
 import { ProjectOrchestrator } from "../orchestrator/project.js";
-import { startProjectTUI, startLegacyTUI } from "../tui/index.js";
+import { startProjectTUI } from "../tui/index.js";
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/fbloom/config.json");
 const DEFAULT_DB_PATH = resolve(homedir(), ".config/fbloom/loom.db");
@@ -248,37 +247,11 @@ export function createProgram(): Command {
   program
     .command("dashboard")
     .description("Open interactive TUI dashboard")
-    .option("--legacy", "Use legacy task dashboard")
-    .action((opts: { legacy?: boolean }) => {
+    .action(() => {
       const store = createStore();
       const config = loadConfig();
-
-      if (opts.legacy) {
-        const orchestrator = new Orchestrator(config, store);
-        startLegacyTUI(orchestrator);
-      } else {
-        const orchestrator = new ProjectOrchestrator(config, store);
-        startProjectTUI(orchestrator);
-      }
-    });
-
-  // ---- Legacy task commands (backward compat) ----
-
-  program
-    .command("submit")
-    .description("Submit a task (legacy mode)")
-    .argument("<description>", "Task description")
-    .option("-t, --title <title>", "Task title", "Untitled Task")
-    .option("-p, --path <path>", "Project path", process.cwd())
-    .option("-v, --version <branch>", "Version branch", "main")
-    .action(async (description: string, opts: { title: string; path: string; version: string }) => {
-      const store = createStore();
-      const config = loadConfig();
-      const orchestrator = new Orchestrator(config, store);
-
-      const task = await orchestrator.submit(opts.title, description, resolve(opts.path), opts.version);
-      console.log(`Task submitted: ${task.id}`);
-      console.log("Use `fbloom dashboard --legacy` to monitor progress.");
+      const orchestrator = new ProjectOrchestrator(config, store);
+      startProjectTUI(orchestrator);
     });
 
   // ---- Config ----
