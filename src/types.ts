@@ -68,9 +68,6 @@ export interface AgentResult {
 
 export interface AppConfig {
   claude_path: string;
-  model_coder: string;
-  model_reviewer: string;
-  model_orchestrator: string;
   max_parallel_agents: number;
   default_max_retries: number;
   deploy: {

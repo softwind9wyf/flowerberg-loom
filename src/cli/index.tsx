@@ -23,9 +23,6 @@ function loadConfig(): AppConfig {
 
   const config: AppConfig = {
     claude_path: claudePath,
-    model_coder: fileConfig.model_coder || "sonnet",
-    model_reviewer: fileConfig.model_reviewer || "opus",
-    model_orchestrator: fileConfig.model_orchestrator || "opus",
     max_parallel_agents: fileConfig.max_parallel_agents || 3,
     default_max_retries: fileConfig.default_max_retries || 3,
     deploy: fileConfig.deploy || {
@@ -176,9 +173,6 @@ program
   .command("config")
   .description("Configure devflow settings")
   .option("--claude-path <path>", "Set claude CLI path")
-  .option("--model-coder <model>", "Set coder model")
-  .option("--model-reviewer <model>", "Set reviewer model")
-  .option("--model-orchestrator <model>", "Set orchestrator model")
   .option("--deploy-host <host>", "Set deploy host")
   .option("--deploy-user <user>", "Set deploy user")
   .option("--deploy-path <path>", "Set deploy path")
@@ -187,9 +181,6 @@ program
     const updates: Partial<AppConfig> = {};
 
     if (opts.claudePath) updates.claude_path = opts.claudePath;
-    if (opts.modelCoder) updates.model_coder = opts.modelCoder;
-    if (opts.modelReviewer) updates.model_reviewer = opts.modelReviewer;
-    if (opts.modelOrchestrator) updates.model_orchestrator = opts.modelOrchestrator;
 
     const deployUpdates: Record<string, string> = {};
     if (opts.deployHost) deployUpdates.host = opts.deployHost;
@@ -208,9 +199,7 @@ program
         console.log(`\nConfig path: ${configPath}`);
         console.log("\nDefaults:");
         console.log(`  claude_path: claude`);
-        console.log(`  model_coder: sonnet`);
-        console.log(`  model_reviewer: opus`);
-        console.log(`  model_orchestrator: opus`);
+        console.log(`  Model: uses Claude Code's default (from env)`);
       }
       return;
     }

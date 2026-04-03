@@ -52,8 +52,7 @@ export class AgentRunner {
 
   /**
    * Run a Claude Code CLI instance for the given subtask type.
-   * Claude Code will have full tool access (read, write, bash, etc.)
-   * and operate autonomously in the project directory.
+   * Uses the default model from environment configuration.
    */
   async run(
     type: SubtaskType,
@@ -61,19 +60,18 @@ export class AgentRunner {
     projectPath: string,
     context?: string,
   ): Promise<AgentResult> {
-    const model = this.getModelForType(type);
     const systemPrompt = AGENT_PROMPTS[type];
 
     const fullPrompt = context
       ? `${taskDescription}\n\nAdditional context:\n${context}`
       : taskDescription;
 
-    return this.execClaude(fullPrompt, systemPrompt, model, projectPath);
+    return this.execClaude(fullPrompt, systemPrompt, projectPath);
   }
 
   /**
-   * Decompose a task using Claude Code CLI with structured output.
-   * This still uses the orchestrator model for task planning.
+   * Decompose a task using Claude Code CLI.
+   * Uses the default model from environment configuration.
    */
   async decompose(taskDescription: string, projectPath: string): Promise<AgentResult> {
     const systemPrompt = `You are an expert software architect. Analyze the codebase and break down the user's request into concrete, implementable subtasks.
@@ -91,29 +89,18 @@ Output ONLY valid JSON array at the end, no markdown fences:
 
     const prompt = `Analyze this project and create an implementation plan for:\n\n${taskDescription}`;
 
-    return this.execClaude(prompt, systemPrompt, this.config.model_orchestrator, projectPath);
-  }
-
-  private getModelForType(type: SubtaskType): string {
-    switch (type) {
-      case "review":
-        return this.config.model_reviewer;
-      default:
-        return this.config.model_coder;
-    }
+    return this.execClaude(prompt, systemPrompt, projectPath);
   }
 
   private execClaude(
     prompt: string,
     systemPrompt: string,
-    model: string,
     cwd: string,
   ): Promise<AgentResult> {
     return new Promise((resolve) => {
       const args = [
         "-p",
         prompt,
-        "--model", model,
         "--system-prompt", systemPrompt,
         "--output-format", "text",
         "--dangerously-skip-permissions",
