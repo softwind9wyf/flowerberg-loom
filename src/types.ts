@@ -67,7 +67,7 @@ export interface AgentResult {
 }
 
 export interface AppConfig {
-  anthropic_api_key: string;
+  claude_path: string;
   model_coder: string;
   model_reviewer: string;
   model_orchestrator: string;

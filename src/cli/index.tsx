@@ -11,7 +11,6 @@ const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/flowerberg-devflow/confi
 const DEFAULT_DB_PATH = resolve(homedir(), ".config/flowerberg-devflow/devflow.db");
 
 function loadConfig(): AppConfig {
-  const envKey = process.env.ANTHROPIC_API_KEY;
   const configPath = process.env.DEVFLOW_CONFIG || DEFAULT_CONFIG_PATH;
 
   let fileConfig: Partial<AppConfig> = {};
@@ -19,11 +18,14 @@ function loadConfig(): AppConfig {
     fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
   }
 
+  // Auto-detect claude CLI path
+  const claudePath = fileConfig.claude_path || "claude";
+
   const config: AppConfig = {
-    anthropic_api_key: envKey || fileConfig.anthropic_api_key || "",
-    model_coder: fileConfig.model_coder || "claude-sonnet-4-6",
-    model_reviewer: fileConfig.model_reviewer || "claude-opus-4-6",
-    model_orchestrator: fileConfig.model_orchestrator || "claude-opus-4-6",
+    claude_path: claudePath,
+    model_coder: fileConfig.model_coder || "sonnet",
+    model_reviewer: fileConfig.model_reviewer || "opus",
+    model_orchestrator: fileConfig.model_orchestrator || "opus",
     max_parallel_agents: fileConfig.max_parallel_agents || 3,
     default_max_retries: fileConfig.default_max_retries || 3,
     deploy: fileConfig.deploy || {
@@ -33,12 +35,6 @@ function loadConfig(): AppConfig {
       path: "",
     },
   };
-
-  if (!config.anthropic_api_key) {
-    console.error("Error: ANTHROPIC_API_KEY not set. Set it via environment variable or config file.");
-    console.error(`Config file: ${configPath}`);
-    process.exit(1);
-  }
 
   return config;
 }
@@ -137,7 +133,6 @@ program
     const store = getStore();
     const task = store.getTask(taskId);
     if (!task) {
-      // Try prefix match
       const tasks = store.listTasks().filter((t) => t.id.startsWith(taskId));
       if (tasks.length === 1) {
         return showTaskDetail(store, tasks[0]);
@@ -180,7 +175,7 @@ function showTaskDetail(store: Store, task: ReturnType<Store["getTask"]>): void 
 program
   .command("config")
   .description("Configure devflow settings")
-  .option("--api-key <key>", "Set Anthropic API key")
+  .option("--claude-path <path>", "Set claude CLI path")
   .option("--model-coder <model>", "Set coder model")
   .option("--model-reviewer <model>", "Set reviewer model")
   .option("--model-orchestrator <model>", "Set orchestrator model")
@@ -191,12 +186,12 @@ program
     const configPath = process.env.DEVFLOW_CONFIG || DEFAULT_CONFIG_PATH;
     const updates: Partial<AppConfig> = {};
 
-    if (opts.apiKey) updates.anthropic_api_key = opts.apiKey;
+    if (opts.claudePath) updates.claude_path = opts.claudePath;
     if (opts.modelCoder) updates.model_coder = opts.modelCoder;
     if (opts.modelReviewer) updates.model_reviewer = opts.modelReviewer;
     if (opts.modelOrchestrator) updates.model_orchestrator = opts.modelOrchestrator;
 
-    const deployUpdates: Partial<AppConfig["deploy"]> = {};
+    const deployUpdates: Record<string, string> = {};
     if (opts.deployHost) deployUpdates.host = opts.deployHost;
     if (opts.deployUser) deployUpdates.user = opts.deployUser;
     if (opts.deployPath) deployUpdates.path = opts.deployPath;
@@ -210,6 +205,12 @@ program
         console.log(readFileSync(configPath, "utf-8"));
       } else {
         console.log("(no config file found)");
+        console.log(`\nConfig path: ${configPath}`);
+        console.log("\nDefaults:");
+        console.log(`  claude_path: claude`);
+        console.log(`  model_coder: sonnet`);
+        console.log(`  model_reviewer: opus`);
+        console.log(`  model_orchestrator: opus`);
       }
       return;
     }

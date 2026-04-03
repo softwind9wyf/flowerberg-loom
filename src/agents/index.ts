@@ -1,8 +1,84 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { spawn } from "child_process";
 import type { AgentResult, AppConfig, SubtaskType } from "../types.js";
 
-const SYSTEM_PROMPTS: Record<SubtaskType | "orchestrator", string> = {
-  orchestrator: `You are an expert software architect. Your job is to break down a user's feature request into concrete, implementable subtasks.
+const AGENT_PROMPTS: Record<SubtaskType, string> = {
+  code: `You are an expert software developer working on a specific subtask of a larger project.
+
+Rules:
+- Read the existing codebase to understand conventions and structure before writing code
+- Write clean, well-structured code following existing patterns
+- After writing code, run relevant tests to verify your changes work
+- If tests fail, fix the issues and re-run until they pass
+- Do NOT add unnecessary features, comments, or abstractions beyond what was asked
+- When done, output a brief summary of what you changed`,
+
+  test: `You are a test engineer. Your job is to write and run tests for code changes.
+
+Rules:
+- Read the existing code to understand what needs testing
+- Use the project's existing test framework and conventions
+- Write tests for both happy path and error cases
+- Run the tests and verify they pass
+- If tests fail, investigate and fix either the test or the code as appropriate
+- When done, output a brief summary of test results`,
+
+  review: `You are a senior code reviewer. Review the recent code changes in this project.
+
+Check for:
+1. Correctness — does the code do what it's supposed to?
+2. Security — any injection, XSS, or other vulnerabilities?
+3. Performance — any obvious bottlenecks?
+4. Code style — does it follow project conventions?
+5. Error handling — are edge cases covered?
+
+Run the tests to verify nothing is broken. Then output your review as JSON:
+{"approved": true/false, "issues": ["..."], "suggestions": ["..."]}`,
+
+  deploy: `You are a deployment specialist. Prepare and deploy the project.
+
+Rules:
+- Run build/check commands to verify the project is ready
+- Check for any obvious issues before deploying
+- Follow the deployment instructions provided
+- Report the deployment result`,
+};
+
+export class AgentRunner {
+  private config: AppConfig;
+
+  constructor(config: AppConfig) {
+    this.config = config;
+  }
+
+  /**
+   * Run a Claude Code CLI instance for the given subtask type.
+   * Claude Code will have full tool access (read, write, bash, etc.)
+   * and operate autonomously in the project directory.
+   */
+  async run(
+    type: SubtaskType,
+    taskDescription: string,
+    projectPath: string,
+    context?: string,
+  ): Promise<AgentResult> {
+    const model = this.getModelForType(type);
+    const systemPrompt = AGENT_PROMPTS[type];
+
+    const fullPrompt = context
+      ? `${taskDescription}\n\nAdditional context:\n${context}`
+      : taskDescription;
+
+    return this.execClaude(fullPrompt, systemPrompt, model, projectPath);
+  }
+
+  /**
+   * Decompose a task using Claude Code CLI with structured output.
+   * This still uses the orchestrator model for task planning.
+   */
+  async decompose(taskDescription: string, projectPath: string): Promise<AgentResult> {
+    const systemPrompt = `You are an expert software architect. Analyze the codebase and break down the user's request into concrete, implementable subtasks.
+
+First, explore the project structure to understand what exists. Then create a plan.
 
 For each subtask, provide:
 - type: "code" | "test" | "review" | "deploy"
@@ -10,69 +86,16 @@ For each subtask, provide:
 - description: detailed description of what needs to be done
 - depends_on: list of subtask indices this depends on (0-based)
 
-Output ONLY valid JSON array, no markdown:
-[{"type":"code","title":"...","description":"...","depends_on":[]}]
-`,
+Output ONLY valid JSON array at the end, no markdown fences:
+[{"type":"code","title":"...","description":"...","depends_on":[]}]`;
 
-  code: `You are an expert software developer. You will be given a task description and you must write the code to implement it.
+    const prompt = `Analyze this project and create an implementation plan for:\n\n${taskDescription}`;
 
-Rules:
-- Write clean, well-structured code
-- Follow existing project conventions
-- Include error handling for external inputs
-- Return the code with file paths as headers
-
-Format your response as:
-### File: path/to/file.ts
-\`\`\`typescript
-// code here
-\`\`\`
-
-### File: path/to/another-file.ts
-\`\`\`typescript
-// code here
-\`\`\`
-`,
-
-  test: `You are a test engineer. Given a code task, write comprehensive tests.
-
-Rules:
-- Test both happy path and error cases
-- Use the project's existing test framework
-- Be thorough but practical
-
-Format your response as:
-### File: path/to/test.ts
-\`\`\`typescript
-// test code here
-\`\`\`
-`,
-
-  review: `You are a senior code reviewer. Review the code changes for:
-1. Correctness
-2. Security issues
-3. Performance concerns
-4. Code style and conventions
-5. Missing error handling
-
-Respond with JSON:
-{"approved": true/false, "issues": ["issue1", "issue2"], "suggestions": ["suggestion1"]}
-`,
-};
-
-export class AgentRunner {
-  private client: Anthropic;
-  private config: AppConfig;
-
-  constructor(config: AppConfig) {
-    this.config = config;
-    this.client = new Anthropic({ apiKey: config.anthropic_api_key });
+    return this.execClaude(prompt, systemPrompt, this.config.model_orchestrator, projectPath);
   }
 
-  private getModelForType(type: SubtaskType | "orchestrator"): string {
+  private getModelForType(type: SubtaskType): string {
     switch (type) {
-      case "orchestrator":
-        return this.config.model_orchestrator;
       case "review":
         return this.config.model_reviewer;
       default:
@@ -80,34 +103,55 @@ export class AgentRunner {
     }
   }
 
-  async run(
-    type: SubtaskType | "orchestrator",
+  private execClaude(
     prompt: string,
-    context?: string
+    systemPrompt: string,
+    model: string,
+    cwd: string,
   ): Promise<AgentResult> {
-    const fullPrompt = context ? `${prompt}\n\nContext:\n${context}` : prompt;
+    return new Promise((resolve) => {
+      const args = [
+        "-p",
+        prompt,
+        "--model", model,
+        "--system-prompt", systemPrompt,
+        "--output-format", "text",
+        "--dangerously-skip-permissions",
+        "--verbose",
+      ];
 
-    try {
-      const response = await this.client.messages.create({
-        model: this.getModelForType(type),
-        max_tokens: 8192,
-        system: SYSTEM_PROMPTS[type],
-        messages: [{ role: "user", content: fullPrompt }],
+      const proc = spawn(this.config.claude_path, args, {
+        cwd,
+        env: { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
       });
 
-      const textBlock = response.content.find((b) => b.type === "text");
-      if (!textBlock || textBlock.type !== "text") {
-        return { success: false, output: "", error: "No text response from model" };
-      }
+      let stdout = "";
+      let stderr = "";
 
-      return { success: true, output: textBlock.text };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      return { success: false, output: "", error: msg };
-    }
-  }
+      proc.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+      });
 
-  async decompose(taskDescription: string): Promise<AgentResult> {
-    return this.run("orchestrator", taskDescription);
+      proc.stderr.on("data", (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve({ success: true, output: stdout.trim() });
+        } else {
+          resolve({
+            success: false,
+            output: stdout.trim(),
+            error: stderr.trim() || `Process exited with code ${code}`,
+          });
+        }
+      });
+
+      proc.on("error", (err) => {
+        resolve({ success: false, output: "", error: err.message });
+      });
+    });
   }
 }
