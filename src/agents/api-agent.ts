@@ -14,14 +14,14 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
 export class ApiAgent implements AgentInterface {
   readonly type = "claude-cli" as const; // keep compatible
   private ai: AiConfig;
-  private provider: "anthropic" | "openai";
+  private apiFormat: "anthropic" | "openai";
 
   constructor(config: AppConfig) {
     if (!config.ai?.api_key) {
       throw new Error("ApiAgent requires ai.api_key in config");
     }
     this.ai = config.ai;
-    this.provider = this.ai.provider || "anthropic";
+    this.apiFormat = this.ai.api_format || "anthropic";
   }
 
   async run(options: AgentRunOptions): Promise<AgentResult> {
@@ -79,7 +79,7 @@ Output ONLY valid JSON array, no markdown fences:
     userPrompt: string,
     onChunk?: (chunk: string) => void,
   ): Promise<string> {
-    if (this.provider === "openai") {
+    if (this.apiFormat === "openai") {
       return this.callOpenAI(systemPrompt, userPrompt, onChunk);
     }
     return this.callAnthropic(systemPrompt, userPrompt, onChunk);

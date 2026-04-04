@@ -33,14 +33,16 @@ export interface AppConfig {
 }
 
 export interface AiConfig {
-  /** API provider: "anthropic" (default) or "openai" for OpenAI-compatible endpoints */
-  provider?: "anthropic" | "openai";
-  /** Base URL for the API. Defaults to provider's official endpoint */
+  /** API format: "anthropic" or "openai" — determines the request/response format */
+  api_format?: "anthropic" | "openai";
+  /** Base URL for the API */
   base_url?: string;
   /** API key for authentication */
   api_key: string;
   /** Model name to use */
   model?: string;
+  /** Provider name (e.g. "anthropic", "openai", "glm", "minimax") — informational only */
+  provider?: string;
 }
 
 /** Backward compat: old format had claude_path as top-level string */
