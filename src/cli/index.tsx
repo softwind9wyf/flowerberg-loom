@@ -121,6 +121,38 @@ export function createProgram(): Command {
     });
 
   program
+    .command("install-skills")
+    .description("Install fbloom skills to .claude/commands/ in the given directory")
+    .argument("[path]", "Project directory (use . for current dir)", ".")
+    .action((targetPath: string) => {
+      const projectPath = resolve(targetPath);
+
+      try {
+        const result = installSkills(projectPath);
+        if (result.installed.length > 0) {
+          console.log(`Installed ${result.installed.length} fbloom skill files to ${result.targetDir}:`);
+          for (const f of result.installed) {
+            console.log(`  - ${f}`);
+          }
+          console.log("\nAvailable in Claude Code:");
+          console.log("  /fbloom-init <name>   — Initialize a fbloom project");
+          console.log("  /fbloom-goal           — Define project goal");
+          console.log("  /fbloom-spec           — Generate specifications");
+          console.log("  /fbloom-plan           — Create implementation plan");
+          console.log("  /fbloom-context        — Manage project context");
+          console.log("  /fbloom-skill          — Generate skill bridge file");
+          console.log("  /fbloom-on             — Enable spec-first rule");
+          console.log("  /fbloom-off            — Disable spec-first rule");
+        } else {
+          console.log("No skill files found to install.");
+        }
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+
+  program
     .command("status")
     .description("Show project status for current or specified directory")
     .argument("[path]", "Project directory (default: current dir)", ".")
