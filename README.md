@@ -155,4 +155,4 @@ MIT
 
 ---
 
-*This project is entirely AI-generated, built through fbloom's own spec-first workflow with Claude Code.*
+*This project is entirely AI-generated, built through fbloom's own spec-first workflow.*
