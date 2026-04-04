@@ -1,90 +1,101 @@
-# flowerberg-loom
+# fbloom
 
-AI-powered development lifecycle loom — weave goals into shipped software.
+AI-powered development lifecycle orchestrator — from goal to deployment.
 
-flowerberg-loom manages software projects through a structured 7-phase lifecycle, using Claude Code as the execution engine.
-
-## Phases
-
-| Phase | Mode | Description |
-|-------|------|-------------|
-| **Goal** | Human | Set the project vision |
-| **Spec** | Hybrid | AI generates technical specification, human approves |
-| **Plan** | Autonomous | AI breaks down implementation into steps |
-| **Dev** | Autonomous | AI implements code in isolated git worktree |
-| **Test** | Autonomous | AI writes and runs tests |
-| **Review** | Autonomous | AI code review |
-| **Deploy** | Hybrid | Build verification, human confirms, git push + GitHub Release |
+fbloom manages software projects through a structured lifecycle, using Claude Code as the AI execution engine. Each project runs its own fbloom instance, with all project data stored in a `.fbloom/` directory alongside your code.
 
 ## Install
 
 ```bash
-npm install
-npm run build
+npm install -g flowerberg-loom
 ```
 
-## Usage
+Requires Node.js 18+ and [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed.
 
-### Create a project
+## Quick Start
 
 ```bash
-fbloom init my-project --path ~/projects/my-project
+# Enter your project directory
+cd my-project
+
+# Launch fbloom — it will auto-detect an existing .fbloom/ or start fresh
+fbloom
 ```
 
-### Set the goal
+First run shows `no project selected`. Initialize with:
+
+```
+/init my-project
+/goal Build a REST API that manages user bookmarks
+```
+
+After that, just run `fbloom` again — it will automatically resume your project.
+
+## Lifecycle
+
+| Phase | Mode | Description |
+|-------|------|-------------|
+| **Goal** | Human | Set the project vision |
+| **Spec** | Hybrid | AI generates spec, human approves |
+| **Plan** | Autonomous | AI breaks down implementation steps |
+| **Dev** | Autonomous | AI writes code in isolated git worktree |
+| **Test** | Autonomous | AI writes and runs tests |
+| **Review** | Autonomous | AI code review |
+| **Deploy** | Hybrid | Build verification, human confirms, git push + GitHub Release |
+
+## Commands
+
+### Chat TUI (default)
+
+Run `fbloom` with no arguments to enter the interactive chat:
+
+| Command | Description |
+|---------|-------------|
+| `/init <name>` | Create a new project |
+| `/goal <text>` | Set or view project goal |
+| `/status` | Show project status and phase progress |
+| `/spec [module]` | View specification modules |
+| `/plan` | View implementation plan |
+| `/diff <from> <to>` | View version diff |
+| `/log` | View change history |
+| `/help` | Show all commands |
+| `/quit` | Exit |
+
+### CLI
 
 ```bash
-fbloom goal <projectId> "Build a CLI tool that..."
+fbloom init <name>              # Create project
+fbloom goal <id> "description"  # Set goal
+fbloom start <id>               # Start lifecycle
+fbloom status <id>              # Check status
+fbloom projects                 # List all projects
+fbloom config --show            # Show configuration
 ```
 
-### Start the lifecycle
+## Project Data
 
-```bash
-fbloom start <projectId>
+fbloom stores all project data in `.fbloom/` within your project root:
+
+```
+.fbloom/
+├── goal.md          # Project goal
+├── plan.md          # Implementation plan with checkable steps
+└── spec/
+    ├── _index.md    # Spec module index
+    ├── overview.md
+    ├── architecture.md
+    └── ...
 ```
 
-### Provide human input
-
-When a phase requires human input (Goal, Spec, Deploy):
-
-```bash
-fbloom input <projectId> "your input"
-```
-
-### Check status
-
-```bash
-fbloom status <projectId>
-fbloom projects
-```
-
-### Interactive dashboard
-
-```bash
-fbloom dashboard
-```
-
-### Deploy
-
-The deploy phase:
-1. Verifies the build (`npm run build` by default)
-2. Checks git working tree is clean
-3. Checks `gh` CLI authentication
-4. Prompts for human confirmation
-5. Pushes to remote git repository
-6. Creates a GitHub Release
+These files are plain markdown with YAML frontmatter, version-controlled alongside your code. You can edit them directly or through fbloom commands.
 
 ## Configuration
 
-Config file: `~/.config/fbloom/config.json`
+`~/.config/fbloom/config.json`:
 
 ```json
 {
   "claude_path": "claude",
-  "default_agent": {
-    "type": "claude-cli",
-    "path": "claude"
-  },
   "deploy": {
     "remote": "origin",
     "branch": "main",
@@ -94,28 +105,6 @@ Config file: `~/.config/fbloom/config.json`
     "verifyBuild": true
   }
 }
-```
-
-## Architecture
-
-```
-src/
-├── cli/            Commander.js CLI entry point
-├── tui/            Ink + React terminal UI
-├── orchestrator/   Phase handlers, state machine, git worktree, deploy
-├── agents/         AI agent factory + Claude CLI implementation
-├── store/          SQLite persistence with migrations
-└── types/          TypeScript type definitions
-```
-
-## Development
-
-```bash
-npm run dev          # Watch mode build
-npm run typecheck    # TypeScript check
-npm run build        # Production build
-npm test             # Run tests (vitest)
-npm run test:watch   # Watch mode tests
 ```
 
 ## License

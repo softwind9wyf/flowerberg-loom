@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS projects (
   goal_metadata TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  completed_at TEXT
+  completed_at TEXT,
+  data_mode TEXT NOT NULL DEFAULT 'file'
 );
 
 CREATE TABLE IF NOT EXISTS phase_states (
@@ -88,15 +89,10 @@ CREATE TABLE IF NOT EXISTS project_logs (
 CREATE INDEX IF NOT EXISTS idx_project_logs_project ON project_logs(project_id, created_at DESC);
 `;
 
-const MIGRATION_004 = `
-ALTER TABLE projects ADD COLUMN data_mode TEXT NOT NULL DEFAULT 'file';
-`;
-
 const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: MIGRATION_001 },
   { version: 2, sql: MIGRATION_002 },
   { version: 3, sql: MIGRATION_003 },
-  { version: 4, sql: MIGRATION_004 },
 ];
 
 export class Store {
