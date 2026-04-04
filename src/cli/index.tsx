@@ -5,7 +5,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import type { AppConfig } from "../types/config.js";
 import { Store } from "../store/index.js";
 import { ProjectOrchestrator } from "../orchestrator/project.js";
-import { startProjectTUI } from "../tui/index.js";
+import { AgentFactory } from "../agents/factory.js";
+import { startProjectTUI, startChatTUI } from "../tui/index.js";
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/fbloom/config.json");
 const DEFAULT_DB_PATH = resolve(homedir(), ".config/fbloom/loom.db");
@@ -279,6 +280,15 @@ export function createProgram(): Command {
       writeFileSync(configPath, JSON.stringify(config, null, 2));
       console.log(`Config saved to ${configPath}`);
     });
+
+  // Default action: when no subcommand is provided, launch Chat TUI
+  program.action(() => {
+    const store = createStore();
+    const config = loadConfig();
+    const agentFactory = new AgentFactory();
+    const agent = agentFactory.getDefault(config);
+    startChatTUI(store, config, agent);
+  });
 
   return program;
 }
