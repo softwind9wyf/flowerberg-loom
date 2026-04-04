@@ -7,6 +7,8 @@ import { Store } from "../store/index.js";
 import { ProjectOrchestrator } from "../orchestrator/project.js";
 import { AgentFactory } from "../agents/factory.js";
 import { startProjectTUI, startChatTUI } from "../tui/index.js";
+import { FileStore } from "../store/file-store.js";
+import type { Project, ProjectPhase } from "../types/project.js";
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/fbloom/config.json");
 const DEFAULT_DB_PATH = resolve(homedir(), ".config/fbloom/loom.db");
@@ -307,13 +309,43 @@ export function createProgram(): Command {
       console.log(`Config saved to ${configPath}`);
     });
 
-  // Default action: when no subcommand is provided, launch Chat TUI
+  // Default action: auto-detect .fbloom/ and launch Chat TUI
   program.action(() => {
     const store = createStore();
     const config = loadConfig();
     const agentFactory = new AgentFactory();
     const agent = agentFactory.getDefault(config);
-    startChatTUI(store, config, agent);
+    const cwd = process.cwd();
+
+    let initialProject: Project | undefined;
+
+    // Auto-detect: check if .fbloom/ exists in cwd
+    const fs = new FileStore(cwd, false);
+    if (fs.exists()) {
+      // Try to find existing project by path
+      let project = store.getProjectByPath(cwd);
+      if (!project) {
+        // Import from .fbloom/ files
+        const data = fs.scanForImport();
+        project = store.createProject({
+          name: data.name,
+          description: "",
+          project_path: cwd,
+          goal: data.goal,
+        });
+        // Set phase statuses based on file presence
+        for (const [phase, status] of Object.entries(data.phaseStatuses)) {
+          if (status === "done") {
+            store.setPhaseState(project.id, phase as ProjectPhase, "done");
+          }
+        }
+        store.updateProject(project.id, { current_phase: data.currentPhase as ProjectPhase });
+        project = store.getProject(project.id);
+      }
+      initialProject = project ?? undefined;
+    }
+
+    startChatTUI(store, config, agent, initialProject);
   });
 
   return program;

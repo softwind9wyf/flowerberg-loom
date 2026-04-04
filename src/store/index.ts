@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync } from "fs";
-import { dirname } from "path";
+import { dirname, resolve } from "path";
 import type { Project, ProjectPhase, PhaseState, PhaseStateStatus } from "../types/project.js";
 import type { SpecDocument, SpecStatus } from "../types/spec.js";
 import type { PlanStep, PlanStepStatus } from "../types/plan.js";
@@ -168,6 +168,10 @@ export class Store {
 
   getProjectByName(name: string): Project | undefined {
     return this.db.prepare("SELECT * FROM projects WHERE name = ?").get(name) as Project | undefined;
+  }
+
+  getProjectByPath(projectPath: string): Project | undefined {
+    return this.db.prepare("SELECT * FROM projects WHERE project_path = ?").get(resolve(projectPath)) as Project | undefined;
   }
 
   listProjects(): Project[] {

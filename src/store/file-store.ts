@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { join, resolve, basename } from "path";
 import { parseFrontmatter, serializeFrontmatter, readParsedFile, writeParsedFile } from "./frontmatter.js";
 import { execCommand } from "../orchestrator/exec.js";
 
@@ -23,6 +23,16 @@ export interface PlanSection {
   items: PlanItem[];
 }
 
+export interface ImportedProjectData {
+  name: string;
+  projectPath: string;
+  goal?: string;
+  currentPhase: string;
+  phaseStatuses: Record<string, string>;
+  hasPlan: boolean;
+  hasSpec: boolean;
+}
+
 // --- FileStore ---
 
 export class FileStore {
@@ -43,6 +53,67 @@ export class FileStore {
     if (!existsSync(join(this.basePath, "spec"))) {
       mkdirSync(join(this.basePath, "spec"), { recursive: true });
     }
+  }
+
+  /** Check if .fbloom/ directory exists */
+  exists(): boolean {
+    return existsSync(this.basePath);
+  }
+
+  /**
+   * Scan .fbloom/ files and return import metadata.
+   * Used to create a DB record from an existing .fbloom directory.
+   */
+  scanForImport(): ImportedProjectData {
+    const projectPath = this.getProjectPath();
+    const name = basename(projectPath);
+    const goal = this.readGoal();
+    const specModules = this.listSpecModules();
+    const planSections = this.readPlan();
+
+    // Determine the furthest completed phase based on what files exist
+    let currentPhase = "goal";
+    if (planSections.length > 0) {
+      currentPhase = "plan";
+      // Check if any dev steps are done
+      const devSection = planSections.find(s => s.phase.toLowerCase() === "dev");
+      if (devSection?.items.some(i => i.checked)) {
+        currentPhase = "dev";
+      }
+    } else if (specModules.length > 0) {
+      currentPhase = "spec";
+    } else if (goal) {
+      currentPhase = "goal";
+    }
+
+    // Build phase statuses from file presence
+    const phaseStatuses: Record<string, string> = {};
+    const phases = ["goal", "spec", "plan", "dev", "test", "review", "deploy"];
+    const completedUpTo = phases.indexOf(currentPhase);
+    for (let i = 0; i < phases.length; i++) {
+      if (i < completedUpTo) {
+        phaseStatuses[phases[i]] = "done";
+      } else if (i === completedUpTo) {
+        phaseStatuses[phases[i]] = goal ? "done" : "pending";
+      } else {
+        phaseStatuses[phases[i]] = "pending";
+      }
+    }
+
+    // If we have goal, mark goal phase as done
+    if (goal) {
+      phaseStatuses["goal"] = "done";
+    }
+
+    return {
+      name,
+      projectPath,
+      goal: goal ?? undefined,
+      currentPhase,
+      phaseStatuses,
+      hasPlan: planSections.length > 0,
+      hasSpec: specModules.length > 0,
+    };
   }
 
   // --- Goal ---

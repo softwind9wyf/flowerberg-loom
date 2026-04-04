@@ -22,13 +22,14 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
   const { stdout } = useStdout();
   const terminalHeight = stdout?.rows ?? 24;
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "system",
-      content: "Welcome to flowerberg-loom. Type /help to see available commands.",
-      timestamp: new Date().toISOString(),
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const welcome = initialProject
+      ? `Welcome back! Resumed project "${initialProject.name}" from .fbloom/. Type /help for commands.`
+      : "Welcome to flowerberg-loom. Type /help to see available commands.";
+    return [
+      { role: "system", content: welcome, timestamp: new Date().toISOString() },
+    ];
+  });
   const [project, setProject] = useState<Project | null>(initialProject ?? null);
   const [fileStore, setFileStore] = useState<FileStore | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
