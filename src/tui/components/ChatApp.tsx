@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { Box, Text, useApp, useStdout } from "ink";
 import { StatusBar } from "./StatusBar.js";
 import { MessageList } from "./MessageList.js";
@@ -7,9 +7,75 @@ import { GoalEditor } from "./GoalEditor.js";
 import { createRegistry, type ChatMessage, type CommandContext } from "../commands/registry.js";
 import type { Store } from "../../store/index.js";
 import { FileStore } from "../../store/file-store.js";
+import { SessionStore } from "../../store/session-store.js";
 import type { AppConfig } from "../../types/config.js";
 import type { Project } from "../../types/project.js";
 import type { AgentInterface } from "../../types/agent.js";
+
+function buildGlobalContext(project: Project | null, fileStore: FileStore | null): string {
+  const lines: string[] = [
+    "## 关于 fbloom",
+    "你正在 fbloom 中辅助用户。fbloom 是一个 AI 驱动的开发生命周期编排工具，按以下 7 个阶段推进项目：",
+    "",
+    "  1. goal — 明确项目目标（当前阶段）",
+    "  2. spec — 根据目标拆分功能规格模块",
+    "  3. plan — 生成实施计划（分步骤 checklist）",
+    "  4. dev  — 调用编程工具（Claude Code / Open Code / Kimi Code 等）执行开发",
+    "  5. test — 自动测试",
+    "  6. review — 代码审查",
+    "  7. deploy — 部署",
+    "",
+    "项目数据存储在项目根目录的 .fbloom/ 目录下：",
+    "  .fbloom/goal.md       — 项目目标",
+    "  .fbloom/specs/*.md    — 规格模块文档",
+    "  .fbloom/plan.md       — 实施计划",
+    "  .fbloom/config.json   — 项目配置",
+    "",
+    "**重要**：你只需要帮助用户完成当前阶段的工作。不要越权创建其他阶段的产出物。",
+    "",
+  ];
+
+  if (project) {
+    lines.push("## 当前项目");
+    lines.push(`- 名称：${project.name}`);
+    lines.push(`- 当前阶段：${project.current_phase}`);
+    lines.push(`- 状态：${project.status}`);
+    const goal = fileStore?.readGoal() ?? project.goal;
+    if (goal) {
+      lines.push(`- 目标：${goal}`);
+    }
+    lines.push("");
+  }
+
+  // Append project-level context.md if it exists
+  const projectContext = fileStore?.readContext();
+  if (projectContext) {
+    lines.push("## 项目自定义上下文");
+    lines.push(projectContext);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+const GOAL_CHAT_ROLE_PROMPT = `你是一个项目管理顾问，正在辅助用户完成 fbloom 的 **goal 阶段**。
+
+你的职责：
+- 帮助用户明确和细化项目目标
+- 引导用户思考核心价值、目标用户、关键功能
+- 如果用户描述模糊，主动提问澄清
+- goal 应该简洁、明确、可执行，1-3 句话
+- 随着讨论深入，逐步精炼 goal
+- **不要**创建 spec、plan 等其他阶段的产出物
+
+每次回复后，在分隔线 "---" 之后给出你当前建议的 goal 文本：
+
+格式示例：
+你的分析和建议...
+
+---
+
+GOAL: 精炼后的 goal 文本`;
 
 interface ChatAppProps {
   store: Store;
@@ -22,6 +88,7 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
   const { exit } = useApp();
   const { stdout } = useStdout();
   const terminalHeight = stdout?.rows ?? 24;
+  const terminalWidth = stdout?.columns ?? 80;
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const welcome = initialProject
@@ -33,17 +100,46 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
   });
   const [project, setProject] = useState<Project | null>(initialProject ?? null);
   const [fileStore, setFileStore] = useState<FileStore | null>(null);
+  const [sessionStore, setSessionStore] = useState<SessionStore | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [editingGoal, setEditingGoal] = useState(false);
   const [goalEditContent, setGoalEditContent] = useState("");
+  const [editingContext, setEditingContext] = useState(false);
+  const [chatMode, setChatMode] = useState<"normal" | "goal" | "spec">("normal");
+  const [lastGoalProposal, setLastGoalProposal] = useState<string>("");
+  const [lastSpecProposal, setLastSpecProposal] = useState<string>("");
+  const [specChatModule, setSpecChatModule] = useState<string>("");
   const registry = createRegistry();
+  const agentRef = useRef(agent);
 
-  // Sync fileStore with project
+  // Keep agent ref up to date
+  useEffect(() => { agentRef.current = agent; }, [agent]);
+
+  // Sync fileStore + sessionStore with project
   useEffect(() => {
     if (project?.project_path) {
       setFileStore(new FileStore(project.project_path, config.deploy?.verifyBuild !== false));
+      setSessionStore(new SessionStore(
+        project.project_path,
+        { maxChars: 20000, keepRecent: 4 },
+        async (oldMessages) => {
+          // AI-powered compression
+          const a = agentRef.current;
+          if (!a) return oldMessages.map((m) => `[${m.role}]: ${m.content.slice(0, 200)}`).join("\n");
+          const result = await a.run({
+            type: "code",
+            prompt: `请用简洁的中文总结以下对话的关键要点，保留所有重要决策和结论：\n\n${
+              oldMessages.map((m) => `[${m.role}]: ${m.content}`).join("\n\n")
+            }`,
+            systemPrompt: "你是一个对话摘要助手。请简洁地总结对话要点，保留关键信息和决策。",
+            cwd: project.project_path,
+          });
+          return result.success ? result.output : oldMessages.map((m) => `[${m.role}]: ${m.content.slice(0, 200)}`).join("\n");
+        },
+      ));
     } else {
       setFileStore(null);
+      setSessionStore(null);
     }
   }, [project?.id, project?.project_path]);
 
@@ -56,6 +152,10 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
     if (project) {
       const updated = store.getProject(project.id);
       if (updated) setProject(updated);
+    } else {
+      // Try to find project by current directory
+      const found = store.getProjectByPath(process.cwd());
+      if (found) setProject(found);
     }
   }, [project, store]);
 
@@ -63,6 +163,75 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
     setGoalEditContent(content);
     setEditingGoal(true);
   }, []);
+
+  const enterGoalChat = useCallback(() => {
+    if (!sessionStore) return;
+    // Get or create goal session
+    const globalCtx = buildGlobalContext(project, fileStore);
+    sessionStore.getOrCreate("goal", "Goal Discussion", globalCtx + "\n" + GOAL_CHAT_ROLE_PROMPT);
+    setChatMode("goal");
+    setLastGoalProposal("");
+  }, [sessionStore]);
+
+  const exitGoalChat = useCallback((save: boolean) => {
+    if (save && lastGoalProposal && project && fileStore) {
+      fileStore.writeGoal(lastGoalProposal);
+      store.updateProject(project.id, { goal: lastGoalProposal });
+      refreshProject();
+      addMessage({ role: "system", content: `Goal saved: ${lastGoalProposal}`, timestamp: new Date().toISOString() });
+    } else if (save && !lastGoalProposal) {
+      addMessage({ role: "system", content: "No goal proposal from AI yet. Keep chatting first.", timestamp: new Date().toISOString() });
+      return;
+    } else {
+      addMessage({ role: "system", content: "Goal chat cancelled.", timestamp: new Date().toISOString() });
+    }
+    setChatMode("normal");
+    setLastGoalProposal("");
+  }, [lastGoalProposal, project, fileStore, store, refreshProject, addMessage]);
+
+  const enterSpecChat = useCallback((moduleName: string) => {
+    if (!sessionStore) return;
+    const globalCtx = buildGlobalContext(project, fileStore);
+    const currentContent = fileStore?.readSpecModule(moduleName)?.content ?? "";
+    const systemPrompt = globalCtx + `\n你是一个软件架构师，正在辅助用户完成 fbloom 的 **spec 阶段**，具体是模块 "${moduleName}" 的规格讨论。
+
+你的职责：
+- 帮助用户细化和完善这个模块的规格
+- 讨论接口定义、数据结构、边界条件、错误处理等
+- 如果用户描述模糊，主动提问澄清
+- **不要**讨论其他模块或创建其他阶段的产出物
+
+每次回复后，在分隔线 "---" 之后给出你当前建议的完整 spec 文本：
+
+格式示例：
+你的分析和建议...
+
+---
+
+SPEC: 完整的模块 spec 文本
+
+当前模块已有内容：
+${currentContent || "（新模块，暂无内容）"}`;
+    sessionStore.getOrCreate(`spec-${moduleName}`, `Spec: ${moduleName}`, systemPrompt);
+    setChatMode("spec");
+    setSpecChatModule(moduleName);
+    setLastSpecProposal("");
+  }, [sessionStore, project, fileStore]);
+
+  const exitSpecChat = useCallback((save: boolean) => {
+    if (save && lastSpecProposal && project && fileStore) {
+      fileStore.writeSpecModule(specChatModule, lastSpecProposal);
+      addMessage({ role: "system", content: `Spec saved: ${specChatModule}`, timestamp: new Date().toISOString() });
+    } else if (save && !lastSpecProposal) {
+      addMessage({ role: "system", content: "No spec proposal from AI yet. Keep chatting first.", timestamp: new Date().toISOString() });
+      return;
+    } else {
+      addMessage({ role: "system", content: "Spec chat cancelled.", timestamp: new Date().toISOString() });
+    }
+    setChatMode("normal");
+    setLastSpecProposal("");
+    setSpecChatModule("");
+  }, [lastSpecProposal, specChatModule, project, fileStore, addMessage]);
 
   const handleGoalSave = useCallback((content: string) => {
     if (project && fileStore) {
@@ -77,6 +246,24 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
   const handleGoalCancel = useCallback(() => {
     setEditingGoal(false);
     addMessage({ role: "system", content: "Goal edit cancelled.", timestamp: new Date().toISOString() });
+  }, [addMessage]);
+
+  const startContextEdit = useCallback((content: string) => {
+    setGoalEditContent(content);
+    setEditingContext(true);
+  }, []);
+
+  const handleContextSave = useCallback((content: string) => {
+    if (project && fileStore) {
+      fileStore.writeContext(content);
+    }
+    setEditingContext(false);
+    addMessage({ role: "system", content: "Context saved to .fbloom/context.md", timestamp: new Date().toISOString() });
+  }, [project, fileStore, addMessage]);
+
+  const handleContextCancel = useCallback(() => {
+    setEditingContext(false);
+    addMessage({ role: "system", content: "Context edit cancelled.", timestamp: new Date().toISOString() });
   }, [addMessage]);
 
   const handleSubmit = useCallback(async (text: string) => {
@@ -104,6 +291,11 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
         addMessage,
         refreshStatus: refreshProject,
         startGoalEdit,
+        startContextEdit,
+        enterGoalChat,
+        enterSpecChat,
+        exitSpecChat,
+        exitGoalChat,
       };
 
       try {
@@ -121,21 +313,61 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
         addMessage({ role: "system", content: `Error: ${err instanceof Error ? err.message : String(err)}`, timestamp: new Date().toISOString() });
       }
     } else {
-      // Free-form text → AI chat (for now, echo back)
+      // Free-form text → AI chat
       addMessage({ role: "user", content: text, timestamp: new Date().toISOString() });
 
       if (!agent) {
-        addMessage({ role: "system", content: "AI agent not available. Start a project lifecycle first.", timestamp: new Date().toISOString() });
+        addMessage({ role: "system", content: "AI agent not available. Configure ai.api_key first.", timestamp: new Date().toISOString() });
         return;
       }
 
       try {
+        let systemPrompt: string | undefined;
+        let prompt = text;
+        let sessionMessages: Array<{ role: "user" | "assistant"; content: string }> | undefined;
+
+        if (chatMode === "goal" && sessionStore) {
+          const globalCtx = buildGlobalContext(project, fileStore);
+          systemPrompt = globalCtx + "\n" + GOAL_CHAT_ROLE_PROMPT;
+          prompt = `用户说：${text}\n\n请分析并给出你的建议。`;
+          sessionMessages = sessionStore.getMessages("goal");
+        } else if (chatMode === "spec" && sessionStore) {
+          const sessionId = `spec-${specChatModule}`;
+          sessionMessages = sessionStore.getMessages(sessionId);
+          const session = sessionStore.get(sessionId);
+          systemPrompt = session?.systemPrompt;
+          prompt = `用户说：${text}\n\n请分析并给出你的建议。`;
+        }
+
         const result = await agent.run({
           type: "code",
-          prompt: text,
+          prompt,
+          ...(systemPrompt ? { systemPrompt } : {}),
+          ...(sessionMessages ? { messages: sessionMessages } : {}),
           cwd: project?.project_path ?? process.cwd(),
         });
         if (result.success) {
+          // Persist to session
+          if (chatMode === "goal" && sessionStore) {
+            sessionStore.addUserMessage("goal", prompt);
+            sessionStore.addAssistantMessage("goal", result.output);
+            await sessionStore.compressIfNeeded("goal");
+
+            const goalMatch = result.output.match(/---\s*\nGOAL:\s*([\s\S]*?)(?:\n*$)/);
+            if (goalMatch) {
+              setLastGoalProposal(goalMatch[1].trim());
+            }
+          } else if (chatMode === "spec" && sessionStore) {
+            const sessionId = `spec-${specChatModule}`;
+            sessionStore.addUserMessage(sessionId, prompt);
+            sessionStore.addAssistantMessage(sessionId, result.output);
+            await sessionStore.compressIfNeeded(sessionId);
+
+            const specMatch = result.output.match(/---\s*\nSPEC:\s*([\s\S]*?)(?:\n*$)/);
+            if (specMatch) {
+              setLastSpecProposal(specMatch[1].trim());
+            }
+          }
           addMessage({ role: "assistant", content: result.output, timestamp: new Date().toISOString() });
         } else {
           addMessage({ role: "system", content: `Agent error: ${result.error}`, timestamp: new Date().toISOString() });
@@ -144,22 +376,28 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
         addMessage({ role: "system", content: `Agent error: ${err instanceof Error ? err.message : String(err)}`, timestamp: new Date().toISOString() });
       }
     }
-  }, [registry, store, fileStore, config, agent, project, addMessage, refreshProject, exit]);
+  }, [registry, store, fileStore, config, agent, project, addMessage, refreshProject, exit, chatMode, enterGoalChat, exitGoalChat, enterSpecChat, exitSpecChat, sessionStore, specChatModule]);
 
   // Layout: status bar (3 rows) + messages + input (3 rows)
   const messageHeight = Math.max(terminalHeight - 6, 5);
 
   return (
     <Box flexDirection="column" height={terminalHeight}>
-      <StatusBar project={project} />
+      <StatusBar project={project} chatMode={chatMode} />
       <Box flexDirection="column" flexGrow={1}>
-        <MessageList messages={messages} height={messageHeight} scrollOffset={scrollOffset} />
+        <MessageList messages={messages} height={messageHeight} scrollOffset={scrollOffset} width={terminalWidth} />
       </Box>
       {editingGoal ? (
         <GoalEditor
           initialContent={goalEditContent}
           onSave={handleGoalSave}
           onCancel={handleGoalCancel}
+        />
+      ) : editingContext ? (
+        <GoalEditor
+          initialContent={goalEditContent}
+          onSave={handleContextSave}
+          onCancel={handleContextCancel}
         />
       ) : (
         <CommandInput onSubmit={handleSubmit} />

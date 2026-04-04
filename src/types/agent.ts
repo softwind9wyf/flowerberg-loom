@@ -5,6 +5,8 @@ export interface AgentRunOptions {
   prompt: string;         // the main prompt / task description
   cwd: string;            // working directory for the agent
   context?: string;       // additional context from completed dependencies
+  systemPrompt?: string;  // override the default system prompt
+  messages?: Array<{ role: "user" | "assistant"; content: string }>; // conversation history
   onChunk?: (chunk: string) => void;  // streaming callback
 }
 

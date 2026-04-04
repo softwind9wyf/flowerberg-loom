@@ -137,6 +137,20 @@ export class FileStore {
     this.tryAutoCommit("set goal");
   }
 
+  // --- Context ---
+
+  readContext(): string | null {
+    const filePath = join(this.basePath, "context.md");
+    if (!existsSync(filePath)) return null;
+    return readParsedFile(filePath).content;
+  }
+
+  writeContext(content: string): void {
+    this.init();
+    writeParsedFile(join(this.basePath, "context.md"), {}, content);
+    this.tryAutoCommit("update context");
+  }
+
   // --- Spec ---
 
   listSpecModules(): string[] {

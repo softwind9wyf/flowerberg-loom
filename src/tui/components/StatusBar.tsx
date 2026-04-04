@@ -15,9 +15,10 @@ const PHASE_LABELS: Record<ProjectPhase, string> = {
 
 interface StatusBarProps {
   project: Project | null;
+  chatMode?: "normal" | "goal" | "spec";
 }
 
-export function StatusBar({ project }: StatusBarProps) {
+export function StatusBar({ project, chatMode = "normal" }: StatusBarProps) {
   if (!project) {
     return (
       <Box borderStyle="round" borderColor="gray" paddingX={1}>
@@ -31,6 +32,12 @@ export function StatusBar({ project }: StatusBarProps) {
     <Box borderStyle="round" borderColor="cyan" paddingX={1}>
       <Text bold color="cyan">fbloom</Text>
       <Text> │ </Text>
+      {chatMode !== "normal" && (
+        <>
+          <Text bold color="magenta">[{chatMode === "goal" ? "goal chat" : chatMode === "spec" ? "spec chat" : chatMode}]</Text>
+          <Text> │ </Text>
+        </>
+      )}
       <Text bold>{project.name}</Text>
       <Text> │ </Text>
       {PHASE_ORDER.map((phase, idx) => {

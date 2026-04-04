@@ -1,10 +1,11 @@
 {
   "name": "flowerberg-loom",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "AI-powered development lifecycle loom — weave goals into shipped software",
   "main": "dist/index.js",
   "bin": {
-    "fbloom": "dist/index.js"
+    "fbloom": "dist/index.js",
+    "create-fbloom-skills": "dist/install-skills.js"
   },
   "scripts": {
     "build": "tsup",

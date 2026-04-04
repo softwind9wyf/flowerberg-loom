@@ -26,13 +26,13 @@ export class ApiAgent implements AgentInterface {
 
   async run(options: AgentRunOptions): Promise<AgentResult> {
     const type = options.type || "code";
-    const systemPrompt = this.getSystemPrompt(type);
+    const systemPrompt = options.systemPrompt || this.getSystemPrompt(type);
     const userPrompt = options.context
       ? `${options.prompt}\n\nAdditional context:\n${options.context}`
       : options.prompt;
 
     try {
-      const output = await this.callApi(systemPrompt, userPrompt, options.onChunk);
+      const output = await this.callApi(systemPrompt, userPrompt, options.onChunk, options.messages);
       return { success: true, output };
     } catch (err) {
       return {
@@ -59,6 +59,8 @@ Output ONLY valid JSON array, no markdown fences:
       const output = await this.callApi(
         systemPrompt,
         `Analyze this project and create an implementation plan for:\n\n${options.prompt}`,
+        undefined,
+        undefined,
       );
       return { success: true, output };
     } catch (err) {
@@ -78,27 +80,31 @@ Output ONLY valid JSON array, no markdown fences:
     systemPrompt: string,
     userPrompt: string,
     onChunk?: (chunk: string) => void,
+    history?: Array<{ role: "user" | "assistant"; content: string }>,
   ): Promise<string> {
     if (this.apiFormat === "openai") {
-      return this.callOpenAI(systemPrompt, userPrompt, onChunk);
+      return this.callOpenAI(systemPrompt, userPrompt, onChunk, history);
     }
-    return this.callAnthropic(systemPrompt, userPrompt, onChunk);
+    return this.callAnthropic(systemPrompt, userPrompt, onChunk, history);
   }
 
   private async callAnthropic(
     systemPrompt: string,
     userPrompt: string,
     onChunk?: (chunk: string) => void,
+    history?: Array<{ role: "user" | "assistant"; content: string }>,
   ): Promise<string> {
     const baseUrl = (this.ai.base_url || DEFAULT_BASE_URLS.anthropic).replace(/\/+$/, "");
     const model = this.ai.model || DEFAULT_MODELS.anthropic;
     const url = `${baseUrl}/v1/messages`;
 
+    const messages = [...(history || []), { role: "user" as const, content: userPrompt }];
+
     const body = JSON.stringify({
       model,
       max_tokens: 8192,
       system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
+      messages,
       stream: !!onChunk,
     });
 
@@ -129,17 +135,21 @@ Output ONLY valid JSON array, no markdown fences:
     systemPrompt: string,
     userPrompt: string,
     onChunk?: (chunk: string) => void,
+    history?: Array<{ role: "user" | "assistant"; content: string }>,
   ): Promise<string> {
     const baseUrl = (this.ai.base_url || DEFAULT_BASE_URLS.openai).replace(/\/+$/, "");
     const model = this.ai.model || DEFAULT_MODELS.openai;
     const url = `${baseUrl}/v1/chat/completions`;
 
+    const messages = [
+      { role: "system" as const, content: systemPrompt },
+      ...(history || []),
+      { role: "user" as const, content: userPrompt },
+    ];
+
     const body = JSON.stringify({
       model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      messages,
       stream: !!onChunk,
     });
 

@@ -1,14 +1,19 @@
 import { Command } from "commander";
-import { resolve } from "path";
+import { resolve, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { fileURLToPath } from "url";
 import type { AppConfig } from "../types/config.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(resolve(__dirname, "../package.json"), "utf-8"));
 import { Store } from "../store/index.js";
 import { ProjectOrchestrator } from "../orchestrator/project.js";
 import { AgentFactory } from "../agents/factory.js";
 import { startProjectTUI, startChatTUI } from "../tui/index.js";
 import { FileStore } from "../store/file-store.js";
 import type { Project, ProjectPhase } from "../types/project.js";
+import { installSkills } from "./skills.js";
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/fbloom/config.json");
 const GLOBAL_FBLOOM_CONFIG = resolve(homedir(), ".fbloom/config.json");
@@ -86,7 +91,7 @@ export function createProgram(): Command {
   program
     .name("fbloom")
     .description("flowerberg-loom — AI-powered development lifecycle loom")
-    .version("0.2.0");
+    .version(pkg.version);
 
   // ---- Project commands ----
 
@@ -105,6 +110,20 @@ export function createProgram(): Command {
         const project = orchestrator.createProject(name, resolve(opts.path), opts.description);
         console.log(`Project created: ${project.name} (id: ${project.id})`);
         console.log(`Path: ${project.project_path}`);
+
+        // Install fbloom skills to .claude/commands/
+        try {
+          const skillResult = installSkills(resolve(opts.path));
+          if (skillResult.installed.length > 0) {
+            console.log(`\nSkills installed (${skillResult.installed.length}):`);
+            for (const f of skillResult.installed) {
+              console.log(`  - ${f}`);
+            }
+          }
+        } catch (skillErr) {
+          console.log(`\n(Skills not installed: ${skillErr instanceof Error ? skillErr.message : String(skillErr)})`);
+        }
+
         console.log(`\nStart with: fbloom start ${project.id}`);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
