@@ -29,6 +29,18 @@ export interface AppConfig {
   max_parallel_agents: number;
   default_max_retries: number;
   deploy: DeployConfig;
+  ai?: AiConfig;
+}
+
+export interface AiConfig {
+  /** API provider: "anthropic" (default) or "openai" for OpenAI-compatible endpoints */
+  provider?: "anthropic" | "openai";
+  /** Base URL for the API. Defaults to provider's official endpoint */
+  base_url?: string;
+  /** API key for authentication */
+  api_key: string;
+  /** Model name to use */
+  model?: string;
 }
 
 /** Backward compat: old format had claude_path as top-level string */

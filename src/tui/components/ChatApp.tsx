@@ -3,6 +3,7 @@ import { Box, Text, useApp, useStdout } from "ink";
 import { StatusBar } from "./StatusBar.js";
 import { MessageList } from "./MessageList.js";
 import { CommandInput } from "./CommandInput.js";
+import { GoalEditor } from "./GoalEditor.js";
 import { createRegistry, type ChatMessage, type CommandContext } from "../commands/registry.js";
 import type { Store } from "../../store/index.js";
 import { FileStore } from "../../store/file-store.js";
@@ -33,6 +34,8 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
   const [project, setProject] = useState<Project | null>(initialProject ?? null);
   const [fileStore, setFileStore] = useState<FileStore | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [goalEditContent, setGoalEditContent] = useState("");
   const registry = createRegistry();
 
   // Sync fileStore with project
@@ -55,6 +58,26 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
       if (updated) setProject(updated);
     }
   }, [project, store]);
+
+  const startGoalEdit = useCallback((content: string) => {
+    setGoalEditContent(content);
+    setEditingGoal(true);
+  }, []);
+
+  const handleGoalSave = useCallback((content: string) => {
+    if (project && fileStore) {
+      fileStore.writeGoal(content);
+      store.updateProject(project.id, { goal: content });
+      refreshProject();
+    }
+    setEditingGoal(false);
+    addMessage({ role: "system", content: "Goal saved.", timestamp: new Date().toISOString() });
+  }, [project, fileStore, store, refreshProject, addMessage]);
+
+  const handleGoalCancel = useCallback(() => {
+    setEditingGoal(false);
+    addMessage({ role: "system", content: "Goal edit cancelled.", timestamp: new Date().toISOString() });
+  }, [addMessage]);
 
   const handleSubmit = useCallback(async (text: string) => {
     if (text.startsWith("/")) {
@@ -80,6 +103,7 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
         project,
         addMessage,
         refreshStatus: refreshProject,
+        startGoalEdit,
       };
 
       try {
@@ -131,7 +155,15 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
       <Box flexDirection="column" flexGrow={1}>
         <MessageList messages={messages} height={messageHeight} scrollOffset={scrollOffset} />
       </Box>
-      <CommandInput onSubmit={handleSubmit} />
+      {editingGoal ? (
+        <GoalEditor
+          initialContent={goalEditContent}
+          onSave={handleGoalSave}
+          onCancel={handleGoalCancel}
+        />
+      ) : (
+        <CommandInput onSubmit={handleSubmit} />
+      )}
     </Box>
   );
 }

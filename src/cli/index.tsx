@@ -11,15 +11,25 @@ import { FileStore } from "../store/file-store.js";
 import type { Project, ProjectPhase } from "../types/project.js";
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/fbloom/config.json");
+const GLOBAL_FBLOOM_CONFIG = resolve(homedir(), ".fbloom/config.json");
 const DEFAULT_DB_PATH = resolve(homedir(), ".config/fbloom/loom.db");
 
-function loadConfig(): AppConfig {
-  const configPath = process.env.DEVFLOW_CONFIG || DEFAULT_CONFIG_PATH;
-
-  let fileConfig: Partial<AppConfig> = {};
-  if (existsSync(configPath)) {
-    fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+function loadJsonFile(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return {};
   }
+}
+
+function loadConfig(): AppConfig {
+  // Load configs in priority order: legacy ~/.config/fbloom → global ~/.fbloom
+  const legacyConfig = loadJsonFile(DEFAULT_CONFIG_PATH);
+  const globalConfig = loadJsonFile(GLOBAL_FBLOOM_CONFIG);
+
+  // Merge: global ~/.fbloom overrides legacy ~/.config/fbloom
+  const fileConfig = { ...legacyConfig, ...globalConfig } as Partial<AppConfig>;
 
   const claudePath = fileConfig.claude_path || fileConfig.default_agent?.path || "claude";
 
@@ -33,9 +43,28 @@ function loadConfig(): AppConfig {
     max_parallel_agents: fileConfig.max_parallel_agents || 3,
     default_max_retries: fileConfig.default_max_retries || 3,
     deploy: fileConfig.deploy || {},
+    ai: fileConfig.ai,
   };
 
   return config;
+}
+
+/** Load AI config with project-level override from .fbloom/config.json */
+export function loadAiConfig(projectPath?: string): AppConfig["ai"] {
+  // Start with global config
+  const config = loadConfig();
+  let ai = config.ai;
+
+  // Override with project-level .fbloom/config.json
+  if (projectPath) {
+    const projectConfigPath = resolve(projectPath, ".fbloom/config.json");
+    const projectConfig = loadJsonFile(projectConfigPath);
+    if (projectConfig.ai && typeof projectConfig.ai === "object") {
+      ai = { ...ai, ...(projectConfig.ai as AppConfig["ai"]) };
+    }
+  }
+
+  return ai;
 }
 
 function ensureDir(filePath: string): void {
@@ -312,10 +341,15 @@ export function createProgram(): Command {
   // Default action: auto-detect .fbloom/ and launch Chat TUI
   program.action(() => {
     const store = createStore();
+    const cwd = process.cwd();
+
+    // Resolve AI config: global ~/.fbloom/config.json → project .fbloom/config.json
+    const ai = loadAiConfig(cwd);
     const config = loadConfig();
+    config.ai = ai;
+
     const agentFactory = new AgentFactory();
     const agent = agentFactory.getDefault(config);
-    const cwd = process.cwd();
 
     let initialProject: Project | undefined;
 

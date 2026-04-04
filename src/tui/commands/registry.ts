@@ -19,6 +19,7 @@ export interface CommandContext {
   project: Project | null;
   addMessage: (msg: ChatMessage) => void;
   refreshStatus: () => void;
+  startGoalEdit?: (content: string) => void;
 }
 
 export interface SlashCommand {
@@ -136,11 +137,20 @@ export function createRegistry(): SlashCommandRegistry {
   registry.register({
     name: "goal",
     aliases: ["g"],
-    description: "Set or view project goal",
-    usage: "/goal [text]",
+    description: "Set, view, or edit project goal",
+    usage: "/goal [edit|text]",
     handler: async (ctx) => {
       if (!ctx.project) {
         ctx.addMessage({ role: "system", content: "No project selected. Use /init <name> first.", timestamp: new Date().toISOString() });
+        return;
+      }
+      if (ctx.args[0] === "edit") {
+        const currentGoal = ctx.fileStore?.readGoal() ?? ctx.project.goal ?? "";
+        if (ctx.startGoalEdit) {
+          ctx.startGoalEdit(currentGoal);
+        } else {
+          ctx.addMessage({ role: "system", content: "Goal editor not available.", timestamp: new Date().toISOString() });
+        }
         return;
       }
       if (ctx.args.length === 0) {
