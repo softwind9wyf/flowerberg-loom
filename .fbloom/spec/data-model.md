@@ -6,83 +6,73 @@ module: data-model
 
 # Data Model
 
-## SQLite Tables (session-store.ts)
+## Design Principle
 
-### projects
-| Column | Type | Description |
-|--------|------|-------------|
-| id | TEXT PK | UUID |
-| name | TEXT | Unique project name |
-| current_phase | TEXT | One of: goal/spec/plan/dev/test/review/deploy |
-| status | TEXT | active/paused/completed/failed/abandoned |
-| project_path | TEXT | Absolute path to project directory |
-| goal | TEXT | Project goal description |
-| data_mode | TEXT | "file" (default) or "sqlite" (legacy) |
+**Files are source of truth.** All project state lives in `.fbloom/` as human-readable, git-friendly files. No database dependency.
 
-### phase_states
-| Column | Type | Description |
-|--------|------|-------------|
-| id | TEXT PK | UUID |
-| project_id | TEXT FK | References projects.id |
-| phase | TEXT | Phase name |
-| status | TEXT | pending/in_progress/waiting_input/done/failed |
-
-### spec_documents
-| Column | Type | Description |
-|--------|------|-------------|
-| id | TEXT PK | UUID |
-| project_id | TEXT FK | References projects.id |
-| version | INTEGER | Spec version number |
-| content | TEXT | Full spec content (markdown) |
-| status | TEXT | draft/review/approved/rejected |
-| ai_generated | BOOLEAN | Whether AI generated this spec |
-| parent_version_id | TEXT | Previous version for audit trail |
-| created_at | TEXT | ISO timestamp |
-| updated_at | TEXT | ISO timestamp |
-
-### plan_steps
-| Column | Type | Description |
-|--------|------|-------------|
-| id | TEXT PK | UUID |
-| project_id | TEXT FK | References projects.id |
-| phase | TEXT | Which phase this step belongs to |
-| sequence | INTEGER | Execution order |
-| title | TEXT | Step title |
-| status | TEXT | pending/in_progress/done/failed |
-| depends_on | TEXT | JSON array of step IDs |
-
-### project_logs
-| Column | Type | Description |
-|--------|------|-------------|
-| id | TEXT PK | UUID |
-| project_id | TEXT FK | References projects.id |
-| phase | TEXT | Phase name |
-| action | TEXT | Action description |
-| details | TEXT | JSON details |
-| timestamp | TEXT | ISO timestamp |
-
-### Migrations
-- Schema versioning via `_meta` table
-- Migration files run sequentially on startup
+- State is derivable from files — any `.fbloom/` directory can be opened fresh without migration
+- Project portability — clone the repo, switch branches, everything works
+- No global state — each project is fully self-contained
 
 ## FileStore Structure (.fbloom/)
 
 ```
 .fbloom/
+├── state.json       # Project state index (non-sensitive, derived)
 ├── goal.md          # YAML frontmatter + goal text (1-3 sentences)
 ├── context.md       # Tech stack, conventions, notes
-├── config.json      # Project-level config
+├── config.json      # Project-level config (sensitive, gitignored)
+├── config.sample.json # Config template (tracked in git)
 ├── spec/
 │   ├── _index.md    # Module index with links
 │   ├── overview.md  # Architecture overview
 │   └── *.md         # Individual spec modules
 ├── plan.md          # Markdown checklist with sections
-└── sessions/        # Chat session history (JSON)
+├── sessions/        # Chat session history (JSON)
+└── logs/            # Runtime logs (JSON lines)
 ```
 
-### Frontmatter Format
+### state.json — Project State Index
 
-All markdown files use YAML frontmatter:
+A lightweight JSON file that tracks project metadata and phase progress. This file is **derived state** — it can be rebuilt from the other files via `scanForImport()`.
+
+```json
+{
+  "name": "my-project",
+  "current_phase": "spec",
+  "status": "active",
+  "created_at": "2026-04-04T09:15:00.000Z",
+  "updated_at": "2026-04-04T16:00:00.000Z",
+  "phases": {
+    "goal": {
+      "status": "done",
+      "started_at": "2026-04-04T09:15:00.000Z",
+      "completed_at": "2026-04-04T09:20:00.000Z"
+    },
+    "spec": {
+      "status": "in_progress",
+      "started_at": "2026-04-04T10:00:00.000Z"
+    },
+    "plan": { "status": "pending" },
+    "dev": { "status": "pending" },
+    "test": { "status": "pending" },
+    "review": { "status": "pending" },
+    "deploy": { "status": "pending" }
+  }
+}
+```
+
+**Rules:**
+- `name` defaults to the project directory name
+- `current_phase` advances as phases complete
+- `status` is one of: `active`, `completed`, `failed`, `abandoned`
+- Phase `status` is one of: `pending`, `in_progress`, `waiting_input`, `done`, `failed`
+- This file is **git-tracked** — it contains no secrets, only project progress
+- Can be regenerated from file presence if corrupted or missing
+
+### goal.md
+
+YAML frontmatter + plain text goal:
 
 ```yaml
 ---
@@ -91,10 +81,38 @@ created: "2026-04-04T09:15:00.000Z"
 updated: "2026-04-04T16:00:00.000Z"
 ---
 
-<markdown content>
+Build an AI-powered development lifecycle orchestrator.
 ```
 
-### Plan Format
+### context.md
+
+Free-form project context (tech stack, conventions, constraints). Updated by user or AI.
+
+### config.json
+
+Project-level configuration overrides. **Gitignored** — may contain API keys and sensitive settings. See `config.sample.json` for the full schema.
+
+### spec/ Directory
+
+Each module is a markdown file with frontmatter:
+
+```yaml
+---
+created: "2026-04-04T09:15:00.000Z"
+updated: "2026-04-04T16:00:00.000Z"
+ai_generated: true
+---
+
+<module content in markdown>
+```
+
+- `_index.md` lists all modules with links
+- Version history is tracked via git, not inline versions
+- Modules are created/updated by AI during spec phase, reviewed by human
+
+### plan.md
+
+Markdown checklist with phase sections:
 
 ```markdown
 ## Dev
@@ -106,17 +124,16 @@ updated: "2026-04-04T16:00:00.000Z"
   Commander.js subcommands
 ```
 
-- `<!-- fbloom-id: ... -->` comments link checklist items to plan_steps table
-- Checked items (`[x]`) map to `done` status
+- Checked items (`[x]`) indicate completed steps
+- `<!-- fbloom-id: ... -->` comments provide stable identifiers for step tracking
 
-## SessionStore
+### sessions/ Directory
 
-Chat sessions stored as JSON files in `sessions/`:
+Chat sessions stored as JSON files:
 
 ```typescript
 interface Session {
   id: string;
-  projectId: string;
   messages: Array<{
     role: "user" | "assistant" | "system";
     content: string;
@@ -129,3 +146,29 @@ interface Session {
 
 - Automatic compression when messages exceed configurable max chars
 - Optional AI-powered summarization
+
+### logs/ Directory
+
+Runtime logs stored as JSON Lines files (one file per day or per session):
+
+```jsonl
+{"ts":"2026-04-04T09:15:00.000Z","level":"info","agent":"orchestrator","phase":"goal","message":"Starting goal phase"}
+{"ts":"2026-04-04T09:20:00.000Z","level":"info","agent":"orchestrator","phase":"goal","message":"Goal phase completed"}
+```
+
+- Logs are append-only, no querying needed
+- Optional cleanup by age (configurable)
+
+## State Reconstruction
+
+When opening an existing `.fbloom/` directory (e.g., after git clone or branch switch):
+
+1. `scanForImport()` reads files to determine project state
+2. If `state.json` exists → use it directly
+3. If `state.json` is missing or corrupted → rebuild from file presence:
+   - `goal.md` exists → goal phase done
+   - `spec/*.md` files exist → spec phase done
+   - `plan.md` exists → plan phase done (check for `[x]` items → dev progress)
+4. Write reconstructed `state.json`
+
+This ensures any branch with `.fbloom/` files can be resumed without setup.

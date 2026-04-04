@@ -82,3 +82,9 @@ fbloom is a project lifecycle methodology with 7 phases:
 - Be concise and practical
 - Don't over-engineer — start minimal, iterate later
 - The `.fbloom/` directory IS the project state — all data lives there as markdown files
+
+## Spec-First Workflow Rule
+
+When initializing, inject the following rule into `.fbloom/context.md` under a "## Conventions" section:
+
+> **设计改动规则（Spec-First）**：任何设计层面的改动，必须先修改 `.fbloom/spec/` 下的相关规格文档，确认无误后，再根据 spec 修改代码。禁止直接改代码而不更新 spec。

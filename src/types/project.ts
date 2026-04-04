@@ -9,7 +9,6 @@ export type ProjectPhase =
 
 export type ProjectStatus =
   | "active"
-  | "paused"
   | "completed"
   | "failed"
   | "abandoned";
@@ -36,21 +35,6 @@ export const PHASE_INTERACTION: Record<ProjectPhase, PhaseInteraction> = {
   deploy: "hybrid",
 };
 
-export interface Project {
-  id: string;
-  name: string;
-  description: string;
-  current_phase: ProjectPhase;
-  status: ProjectStatus;
-  project_path: string;
-  goal: string | null;
-  goal_metadata: string | null;
-  data_mode: string;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-}
-
 export type PhaseStateStatus =
   | "pending"
   | "in_progress"
@@ -58,9 +42,42 @@ export type PhaseStateStatus =
   | "done"
   | "failed";
 
+/** Phase state entry in state.json */
+export interface PhaseStateInfo {
+  status: PhaseStateStatus;
+  started_at?: string | null;
+  completed_at?: string | null;
+  input_data?: string | null;
+  output_data?: string | null;
+  error_message?: string | null;
+}
+
+/** state.json structure — the project state index */
+export interface ProjectState {
+  name: string;
+  current_phase: ProjectPhase;
+  status: ProjectStatus;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+  phases: Partial<Record<ProjectPhase, PhaseStateInfo>>;
+}
+
+/** Backward-compatible project view (used by TUI, CLI) */
+export interface Project {
+  name: string;
+  description: string;
+  current_phase: ProjectPhase;
+  status: ProjectStatus;
+  project_path: string;
+  goal: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+/** @deprecated Kept for gradual migration — prefer ProjectState */
 export interface PhaseState {
-  id: string;
-  project_id: string;
   phase: ProjectPhase;
   status: PhaseStateStatus;
   started_at: string | null;

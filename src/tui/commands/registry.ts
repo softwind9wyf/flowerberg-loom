@@ -1,6 +1,5 @@
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import type { Store } from "../../store/index.js";
 import type { FileStore } from "../../store/file-store.js";
 import type { AppConfig } from "../../types/config.js";
 import type { Project } from "../../types/project.js";
@@ -14,8 +13,7 @@ export interface ChatMessage {
 
 export interface CommandContext {
   args: string[];
-  store: Store;
-  fileStore: FileStore | null;
+  fileStore: FileStore;
   config: AppConfig;
   agent: AgentInterface | null;
   project: Project | null;
@@ -91,17 +89,17 @@ export function createRegistry(): SlashCommandRegistry {
     description: "Show project status",
     usage: "/status",
     handler: async (ctx) => {
-      if (!ctx.project) {
-        ctx.addMessage({ role: "system", content: "No project selected. Use /init <name> first.", timestamp: new Date().toISOString() });
+      const state = ctx.fileStore.readState();
+      if (!state) {
+        ctx.addMessage({ role: "system", content: "No project found. Use /init first.", timestamp: new Date().toISOString() });
         return;
       }
-      const p = ctx.project;
-      const phaseStates = ctx.store.getAllPhaseStates(p.id);
-      const goal = ctx.fileStore?.readGoal() ?? p.goal ?? "(not set)";
-      const progress = ctx.fileStore?.getPlanProgress();
+      const goal = ctx.fileStore.readGoal() ?? "(not set)";
+      const phaseStates = ctx.fileStore.getAllPhaseStates();
+      const progress = ctx.fileStore.getPlanProgress();
       const lines = [
-        `Project: ${p.name} (${p.id.slice(0, 8)})`,
-        `Status: ${p.status} | Phase: ${p.current_phase}`,
+        `Project: ${state.name}`,
+        `Status: ${state.status} | Phase: ${state.current_phase}`,
         `Goal: ${goal}`,
         "",
         "Phases:",
@@ -125,13 +123,15 @@ export function createRegistry(): SlashCommandRegistry {
     handler: async (ctx) => {
       const projectPath = process.cwd();
       const name = ctx.args[0] || projectPath.split("/").pop() || "untitled";
-      const existing = ctx.store.getProjectByPath(projectPath);
-      if (existing) {
-        ctx.addMessage({ role: "system", content: `Project "${existing.name}" already exists for this directory (id: ${existing.id.slice(0, 8)})`, timestamp: new Date().toISOString() });
+
+      if (ctx.fileStore.exists()) {
+        const existing = ctx.fileStore.readState();
+        ctx.addMessage({ role: "system", content: `Project "${existing?.name}" already exists for this directory.`, timestamp: new Date().toISOString() });
         return;
       }
-      const project = ctx.store.createProject({ name, description: "", project_path: projectPath });
-      ctx.addMessage({ role: "system", content: `Project created: ${name} (id: ${project.id.slice(0, 8)})\nPath: ${projectPath}\n\nSet a goal with: /goal <description>`, timestamp: new Date().toISOString() });
+
+      ctx.fileStore.initProject(name);
+      ctx.addMessage({ role: "system", content: `Project created: ${name}\nPath: ${projectPath}\n\nSet a goal with: /goal <description>`, timestamp: new Date().toISOString() });
     },
   });
 
@@ -142,10 +142,6 @@ export function createRegistry(): SlashCommandRegistry {
     description: "Set, view, edit, or chat about project goal",
     usage: "/goal [chat|edit|save|cancel|text]",
     handler: async (ctx) => {
-      if (!ctx.project) {
-        ctx.addMessage({ role: "system", content: "No project selected. Use /init first.", timestamp: new Date().toISOString() });
-        return;
-      }
       const sub = ctx.args[0];
 
       if (sub === "chat") {
@@ -175,7 +171,7 @@ export function createRegistry(): SlashCommandRegistry {
       }
 
       if (sub === "edit") {
-        const currentGoal = ctx.fileStore?.readGoal() ?? ctx.project.goal ?? "";
+        const currentGoal = ctx.fileStore.readGoal() ?? ctx.project?.goal ?? "";
         if (ctx.startGoalEdit) {
           ctx.startGoalEdit(currentGoal);
         } else {
@@ -183,14 +179,15 @@ export function createRegistry(): SlashCommandRegistry {
         }
         return;
       }
+
       if (ctx.args.length === 0) {
-        const goal = ctx.fileStore?.readGoal() ?? ctx.project.goal ?? "(not set)";
+        const goal = ctx.fileStore.readGoal() ?? ctx.project?.goal ?? "(not set)";
         ctx.addMessage({ role: "system", content: `Goal: ${goal}`, timestamp: new Date().toISOString() });
         return;
       }
+
       const goalText = ctx.args.join(" ");
-      ctx.store.updateProject(ctx.project.id, { goal: goalText });
-      ctx.fileStore?.writeGoal(goalText);
+      ctx.fileStore.writeGoal(goalText);
       ctx.addMessage({ role: "system", content: `Goal set: ${goalText}`, timestamp: new Date().toISOString() });
     },
   });
@@ -201,10 +198,6 @@ export function createRegistry(): SlashCommandRegistry {
     description: "View or edit project AI context (.fbloom/context.md)",
     usage: "/context [edit]",
     handler: async (ctx) => {
-      if (!ctx.fileStore) {
-        ctx.addMessage({ role: "system", content: "No file store available.", timestamp: new Date().toISOString() });
-        return;
-      }
       if (ctx.args[0] === "edit") {
         const current = ctx.fileStore.readContext() ?? "";
         if (ctx.startContextEdit) {
@@ -227,11 +220,6 @@ export function createRegistry(): SlashCommandRegistry {
     description: "View specs, generate from goal, or chat about a module",
     usage: "/spec [generate|<module>|chat <module>]",
     handler: async (ctx) => {
-      if (!ctx.fileStore) {
-        ctx.addMessage({ role: "system", content: "No file store available.", timestamp: new Date().toISOString() });
-        return;
-      }
-
       const sub = ctx.args[0];
 
       // /spec generate — AI generates specs from goal
@@ -287,7 +275,6 @@ export function createRegistry(): SlashCommandRegistry {
         // Parse and write specs
         try {
           let jsonText = result.output.trim();
-          // Strip markdown code fence if present
           const fenceMatch = jsonText.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
           if (fenceMatch) jsonText = fenceMatch[1];
 
@@ -380,10 +367,6 @@ export function createRegistry(): SlashCommandRegistry {
     description: "View or update plan",
     usage: "/plan [done <section> <step>]",
     handler: async (ctx) => {
-      if (!ctx.fileStore) {
-        ctx.addMessage({ role: "system", content: "No file store available.", timestamp: new Date().toISOString() });
-        return;
-      }
       if (ctx.args[0] === "done" && ctx.args.length >= 3) {
         const sectionIdx = parseInt(ctx.args[1], 10);
         const stepIdx = parseInt(ctx.args[2], 10);
@@ -419,10 +402,6 @@ export function createRegistry(): SlashCommandRegistry {
     description: "View version diff",
     usage: "/diff <from> <to>",
     handler: async (ctx) => {
-      if (!ctx.fileStore) {
-        ctx.addMessage({ role: "system", content: "No file store available.", timestamp: new Date().toISOString() });
-        return;
-      }
       if (ctx.args.length < 2) {
         ctx.addMessage({ role: "system", content: "Usage: /diff <from-ref> <to-ref>", timestamp: new Date().toISOString() });
         return;
@@ -439,10 +418,6 @@ export function createRegistry(): SlashCommandRegistry {
     description: "View change history",
     usage: "/log",
     handler: async (ctx) => {
-      if (!ctx.fileStore) {
-        ctx.addMessage({ role: "system", content: "No file store available.", timestamp: new Date().toISOString() });
-        return;
-      }
       const log = await ctx.fileStore.getLog(20);
       ctx.addMessage({ role: "system", content: log || "No history found.", timestamp: new Date().toISOString() });
     },
@@ -454,11 +429,6 @@ export function createRegistry(): SlashCommandRegistry {
     description: "Generate skill files for coding tools (Claude Code, etc.)",
     usage: "/skill [install|update]",
     handler: async (ctx) => {
-      if (!ctx.fileStore) {
-        ctx.addMessage({ role: "system", content: "No file store available.", timestamp: new Date().toISOString() });
-        return;
-      }
-
       const projectRoot = ctx.project?.project_path ?? process.cwd();
 
       // Read current project state
@@ -472,7 +442,7 @@ export function createRegistry(): SlashCommandRegistry {
       if (specModules.length > 0) {
         const lines: string[] = [];
         for (const modName of specModules) {
-          const mod = ctx.fileStore!.readSpecModule(modName);
+          const mod = ctx.fileStore.readSpecModule(modName);
           if (mod) {
             const firstLine = mod.content.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "") ?? modName;
             lines.push(`- ${modName.replace(".md", "")}: ${firstLine}`);
@@ -558,9 +528,7 @@ Argument: $ARGUMENTS
     aliases: ["q", "exit"],
     description: "Exit the application",
     usage: "/quit",
-    handler: async (ctx) => {
-      // The handler signals quit by throwing a special symbol
-      // ChatApp catches it and exits
+    handler: async (_ctx) => {
       throw new Error("__QUIT__");
     },
   });

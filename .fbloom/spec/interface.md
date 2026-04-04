@@ -9,17 +9,18 @@ module: interface
 ## CLI Commands
 
 ```
-fbloom                                # Launch Chat TUI (default)
-fbloom init <name>                    # Create project
+fbloom                                # Launch Chat TUI (default, auto-detects .fbloom/)
+fbloom init <path>                    # Create project in given directory
 fbloom projects                       # List all projects
 fbloom start <id>                     # Start/resume lifecycle
 fbloom goal <id> "description"        # Set project goal
 fbloom status <id>                    # Show project status
 fbloom input <id> <value>             # Provide human input to orchestrator
-fbloom migrate <id>                   # Migrate SQLite → FileStore
 fbloom dashboard                      # Legacy project dashboard TUI
 fbloom config [--show|--set-*]        # View/edit configuration
 ```
+
+Note: `migrate` command removed — no SQLite to migrate from. State is always file-based.
 
 ## Chat TUI Slash Commands
 
@@ -84,21 +85,22 @@ interface AgentResult {
 
 ## Configuration
 
-### Global config (~/.config/fbloom/config.json)
+### Global config (~/.fbloom/config.json)
 
 ```json
 {
-  "claude_path": "claude",
   "default_agent": {
     "type": "claude-cli",
     "path": "claude"
   },
   "max_parallel_agents": 3,
+  "default_max_retries": 3,
   "ai": {
-    "provider": "anthropic",
-    "api_key_env": "ANTHROPIC_API_KEY",
+    "api_format": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "api_key": "YOUR_API_KEY_HERE",
     "model": "claude-sonnet-4-6",
-    "base_url": "https://api.anthropic.com"
+    "provider": "anthropic"
   },
   "deploy": {
     "remote": "origin",
@@ -113,11 +115,7 @@ interface AgentResult {
 
 ### Project config (.fbloom/config.json)
 
-```json
-{}
-```
-
-Per-project overrides (empty by default, inherits from global config).
+Per-project overrides (gitignored, may contain API keys). Inherits from global config. See `.fbloom/config.sample.json` for full schema.
 
 ## Events
 

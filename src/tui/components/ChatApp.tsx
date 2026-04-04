@@ -5,7 +5,6 @@ import { MessageList } from "./MessageList.js";
 import { CommandInput } from "./CommandInput.js";
 import { GoalEditor } from "./GoalEditor.js";
 import { createRegistry, type ChatMessage, type CommandContext } from "../commands/registry.js";
-import type { Store } from "../../store/index.js";
 import { FileStore } from "../../store/file-store.js";
 import { SessionStore } from "../../store/session-store.js";
 import type { AppConfig } from "../../types/config.js";
@@ -78,13 +77,13 @@ const GOAL_CHAT_ROLE_PROMPT = `你是一个项目管理顾问，正在辅助用�
 GOAL: 精炼后的 goal 文本`;
 
 interface ChatAppProps {
-  store: Store;
+  fileStore: FileStore;
   config: AppConfig;
   agent: AgentInterface | null;
   initialProject?: Project;
 }
 
-export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) {
+export function ChatApp({ fileStore: mainFileStore, config, agent, initialProject }: ChatAppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const terminalHeight = stdout?.rows ?? 24;
@@ -99,7 +98,6 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
     ];
   });
   const [project, setProject] = useState<Project | null>(initialProject ?? null);
-  const [fileStore, setFileStore] = useState<FileStore | null>(null);
   const [sessionStore, setSessionStore] = useState<SessionStore | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [editingGoal, setEditingGoal] = useState(false);
@@ -115,15 +113,13 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
   // Keep agent ref up to date
   useEffect(() => { agentRef.current = agent; }, [agent]);
 
-  // Sync fileStore + sessionStore with project
+  // Sync sessionStore with project
   useEffect(() => {
     if (project?.project_path) {
-      setFileStore(new FileStore(project.project_path, config.deploy?.verifyBuild !== false));
       setSessionStore(new SessionStore(
         project.project_path,
         { maxChars: 20000, keepRecent: 4 },
         async (oldMessages) => {
-          // AI-powered compression
           const a = agentRef.current;
           if (!a) return oldMessages.map((m) => `[${m.role}]: ${m.content.slice(0, 200)}`).join("\n");
           const result = await a.run({
@@ -138,10 +134,9 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
         },
       ));
     } else {
-      setFileStore(null);
       setSessionStore(null);
     }
-  }, [project?.id, project?.project_path]);
+  }, [project?.project_path]);
 
   const addMessage = useCallback((msg: ChatMessage) => {
     setMessages((prev) => [...prev, msg]);
@@ -149,15 +144,22 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
   }, []);
 
   const refreshProject = useCallback(() => {
-    if (project) {
-      const updated = store.getProject(project.id);
-      if (updated) setProject(updated);
-    } else {
-      // Try to find project by current directory
-      const found = store.getProjectByPath(process.cwd());
-      if (found) setProject(found);
+    const state = mainFileStore.readState();
+    if (state) {
+      const goal = mainFileStore.readGoal();
+      setProject({
+        name: state.name,
+        description: "",
+        current_phase: state.current_phase,
+        status: state.status,
+        project_path: mainFileStore.getProjectPath(),
+        goal,
+        created_at: state.created_at,
+        updated_at: state.updated_at,
+        completed_at: state.completed_at ?? null,
+      });
     }
-  }, [project, store]);
+  }, [mainFileStore]);
 
   const startGoalEdit = useCallback((content: string) => {
     setGoalEditContent(content);
@@ -166,17 +168,16 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
 
   const enterGoalChat = useCallback(() => {
     if (!sessionStore) return;
-    // Get or create goal session
-    const globalCtx = buildGlobalContext(project, fileStore);
+    const globalCtx = buildGlobalContext(project, mainFileStore);
     sessionStore.getOrCreate("goal", "Goal Discussion", globalCtx + "\n" + GOAL_CHAT_ROLE_PROMPT);
     setChatMode("goal");
     setLastGoalProposal("");
   }, [sessionStore]);
 
   const exitGoalChat = useCallback((save: boolean) => {
-    if (save && lastGoalProposal && project && fileStore) {
-      fileStore.writeGoal(lastGoalProposal);
-      store.updateProject(project.id, { goal: lastGoalProposal });
+    if (save && lastGoalProposal && project) {
+      mainFileStore.writeGoal(lastGoalProposal);
+      mainFileStore.updateProjectMeta({ current_phase: mainFileStore.readState()?.current_phase });
       refreshProject();
       addMessage({ role: "system", content: `Goal saved: ${lastGoalProposal}`, timestamp: new Date().toISOString() });
     } else if (save && !lastGoalProposal) {
@@ -187,12 +188,12 @@ export function ChatApp({ store, config, agent, initialProject }: ChatAppProps) 
     }
     setChatMode("normal");
     setLastGoalProposal("");
-  }, [lastGoalProposal, project, fileStore, store, refreshProject, addMessage]);
+  }, [lastGoalProposal, project, mainFileStore, refreshProject, addMessage]);
 
   const enterSpecChat = useCallback((moduleName: string) => {
     if (!sessionStore) return;
-    const globalCtx = buildGlobalContext(project, fileStore);
-    const currentContent = fileStore?.readSpecModule(moduleName)?.content ?? "";
+    const globalCtx = buildGlobalContext(project, mainFileStore);
+    const currentContent = mainFileStore.readSpecModule(moduleName)?.content ?? "";
     const systemPrompt = globalCtx + `\n你是一个软件架构师，正在辅助用户完成 fbloom 的 **spec 阶段**，具体是模块 "${moduleName}" 的规格讨论。
 
 你的职责：
@@ -216,11 +217,11 @@ ${currentContent || "（新模块，暂无内容）"}`;
     setChatMode("spec");
     setSpecChatModule(moduleName);
     setLastSpecProposal("");
-  }, [sessionStore, project, fileStore]);
+  }, [sessionStore, project]);
 
   const exitSpecChat = useCallback((save: boolean) => {
-    if (save && lastSpecProposal && project && fileStore) {
-      fileStore.writeSpecModule(specChatModule, lastSpecProposal);
+    if (save && lastSpecProposal) {
+      mainFileStore.writeSpecModule(specChatModule, lastSpecProposal);
       addMessage({ role: "system", content: `Spec saved: ${specChatModule}`, timestamp: new Date().toISOString() });
     } else if (save && !lastSpecProposal) {
       addMessage({ role: "system", content: "No spec proposal from AI yet. Keep chatting first.", timestamp: new Date().toISOString() });
@@ -231,17 +232,14 @@ ${currentContent || "（新模块，暂无内容）"}`;
     setChatMode("normal");
     setLastSpecProposal("");
     setSpecChatModule("");
-  }, [lastSpecProposal, specChatModule, project, fileStore, addMessage]);
+  }, [lastSpecProposal, specChatModule, mainFileStore, addMessage]);
 
   const handleGoalSave = useCallback((content: string) => {
-    if (project && fileStore) {
-      fileStore.writeGoal(content);
-      store.updateProject(project.id, { goal: content });
-      refreshProject();
-    }
+    mainFileStore.writeGoal(content);
+    refreshProject();
     setEditingGoal(false);
     addMessage({ role: "system", content: "Goal saved.", timestamp: new Date().toISOString() });
-  }, [project, fileStore, store, refreshProject, addMessage]);
+  }, [mainFileStore, refreshProject, addMessage]);
 
   const handleGoalCancel = useCallback(() => {
     setEditingGoal(false);
@@ -254,12 +252,10 @@ ${currentContent || "（新模块，暂无内容）"}`;
   }, []);
 
   const handleContextSave = useCallback((content: string) => {
-    if (project && fileStore) {
-      fileStore.writeContext(content);
-    }
+    mainFileStore.writeContext(content);
     setEditingContext(false);
     addMessage({ role: "system", content: "Context saved to .fbloom/context.md", timestamp: new Date().toISOString() });
-  }, [project, fileStore, addMessage]);
+  }, [mainFileStore, addMessage]);
 
   const handleContextCancel = useCallback(() => {
     setEditingContext(false);
@@ -272,7 +268,6 @@ ${currentContent || "（新模块，暂无内容）"}`;
       const cmdName = parts[0].toLowerCase();
       const args = parts.slice(1);
 
-      // Add user message showing the command
       addMessage({ role: "user", content: text, timestamp: new Date().toISOString() });
 
       const cmd = registry.get(cmdName);
@@ -283,8 +278,7 @@ ${currentContent || "（新模块，暂无内容）"}`;
 
       const ctx: CommandContext = {
         args,
-        store,
-        fileStore,
+        fileStore: mainFileStore,
         config,
         agent,
         project,
@@ -300,7 +294,6 @@ ${currentContent || "（新模块，暂无内容）"}`;
 
       try {
         await cmd.handler(ctx);
-        // If command modified project, refresh
         if (["init", "goal"].includes(cmdName)) {
           refreshProject();
         }
@@ -327,7 +320,7 @@ ${currentContent || "（新模块，暂无内容）"}`;
         let sessionMessages: Array<{ role: "user" | "assistant"; content: string }> | undefined;
 
         if (chatMode === "goal" && sessionStore) {
-          const globalCtx = buildGlobalContext(project, fileStore);
+          const globalCtx = buildGlobalContext(project, mainFileStore);
           systemPrompt = globalCtx + "\n" + GOAL_CHAT_ROLE_PROMPT;
           prompt = `用户说：${text}\n\n请分析并给出你的建议。`;
           sessionMessages = sessionStore.getMessages("goal");
@@ -376,7 +369,7 @@ ${currentContent || "（新模块，暂无内容）"}`;
         addMessage({ role: "system", content: `Agent error: ${err instanceof Error ? err.message : String(err)}`, timestamp: new Date().toISOString() });
       }
     }
-  }, [registry, store, fileStore, config, agent, project, addMessage, refreshProject, exit, chatMode, enterGoalChat, exitGoalChat, enterSpecChat, exitSpecChat, sessionStore, specChatModule]);
+  }, [registry, mainFileStore, config, agent, project, addMessage, refreshProject, exit, chatMode, enterGoalChat, exitGoalChat, enterSpecChat, exitSpecChat, sessionStore, specChatModule]);
 
   // Layout: status bar (3 rows) + messages + input (3 rows)
   const messageHeight = Math.max(terminalHeight - 6, 5);

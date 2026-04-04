@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { join, resolve, basename } from "path";
 import { parseFrontmatter, serializeFrontmatter, readParsedFile, writeParsedFile } from "./frontmatter.js";
 import { execCommand } from "../orchestrator/exec.js";
+import type { ProjectPhase, ProjectStatus, PhaseStateStatus, PhaseStateInfo, ProjectState } from "../types/project.js";
+import { PHASE_ORDER } from "../types/project.js";
 
 // --- Types ---
 
@@ -33,6 +35,14 @@ export interface ImportedProjectData {
   hasSpec: boolean;
 }
 
+export interface LogEntry {
+  ts: string;
+  level: "info" | "warn" | "error" | "debug";
+  agent: string;
+  phase?: string;
+  message: string;
+}
+
 // --- FileStore ---
 
 export class FileStore {
@@ -53,6 +63,9 @@ export class FileStore {
     if (!existsSync(join(this.basePath, "spec"))) {
       mkdirSync(join(this.basePath, "spec"), { recursive: true });
     }
+    if (!existsSync(join(this.basePath, "logs"))) {
+      mkdirSync(join(this.basePath, "logs"), { recursive: true });
+    }
   }
 
   /** Check if .fbloom/ directory exists */
@@ -60,60 +73,191 @@ export class FileStore {
     return existsSync(this.basePath);
   }
 
-  /**
-   * Scan .fbloom/ files and return import metadata.
-   * Used to create a DB record from an existing .fbloom directory.
-   */
-  scanForImport(): ImportedProjectData {
-    const projectPath = this.getProjectPath();
-    const name = basename(projectPath);
+  // --- State (state.json) ---
+
+  /** Read project state from state.json */
+  readState(): ProjectState | null {
+    const filePath = join(this.basePath, "state.json");
+    if (!existsSync(filePath)) return null;
+    try {
+      return JSON.parse(readFileSync(filePath, "utf-8"));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Write project state to state.json */
+  writeState(state: ProjectState): void {
+    this.init();
+    writeFileSync(
+      join(this.basePath, "state.json"),
+      JSON.stringify(state, null, 2) + "\n",
+    );
+  }
+
+  /** Initialize a new project with state.json */
+  initProject(name: string): ProjectState {
+    this.init();
+    const now = new Date().toISOString();
+    const phases: Partial<Record<ProjectPhase, PhaseStateInfo>> = {};
+    for (const phase of PHASE_ORDER) {
+      phases[phase] = { status: "pending", started_at: null, completed_at: null, input_data: null, output_data: null, error_message: null };
+    }
+
+    const state: ProjectState = {
+      name,
+      current_phase: "goal",
+      status: "active",
+      created_at: now,
+      updated_at: now,
+      completed_at: null,
+      phases,
+    };
+    this.writeState(state);
+    this.tryAutoCommit("init project");
+    return state;
+  }
+
+  /** Rebuild state.json from existing files (scanForImport) */
+  rebuildState(): ProjectState | null {
+    const name = basename(this.getProjectPath());
     const goal = this.readGoal();
     const specModules = this.listSpecModules();
     const planSections = this.readPlan();
 
-    // Determine the furthest completed phase based on what files exist
-    let currentPhase = "goal";
+    let currentPhase: ProjectPhase = "goal";
     if (planSections.length > 0) {
       currentPhase = "plan";
-      // Check if any dev steps are done
       const devSection = planSections.find(s => s.phase.toLowerCase() === "dev");
       if (devSection?.items.some(i => i.checked)) {
         currentPhase = "dev";
       }
     } else if (specModules.length > 0) {
       currentPhase = "spec";
-    } else if (goal) {
-      currentPhase = "goal";
     }
 
-    // Build phase statuses from file presence
-    const phaseStatuses: Record<string, string> = {};
-    const phases = ["goal", "spec", "plan", "dev", "test", "review", "deploy"];
-    const completedUpTo = phases.indexOf(currentPhase);
-    for (let i = 0; i < phases.length; i++) {
-      if (i < completedUpTo) {
-        phaseStatuses[phases[i]] = "done";
-      } else if (i === completedUpTo) {
-        phaseStatuses[phases[i]] = goal ? "done" : "pending";
-      } else {
-        phaseStatuses[phases[i]] = "pending";
-      }
+    const now = new Date().toISOString();
+    const phases: Partial<Record<ProjectPhase, PhaseStateInfo>> = {};
+    for (const phase of PHASE_ORDER) {
+      const phaseIdx = PHASE_ORDER.indexOf(phase);
+      const currentIdx = PHASE_ORDER.indexOf(currentPhase);
+      phases[phase] = {
+        status: phaseIdx < currentIdx ? "done" : phaseIdx === currentIdx && goal ? "done" : "pending",
+        started_at: phaseIdx <= currentIdx ? now : null,
+        completed_at: phaseIdx < currentIdx || (phaseIdx === currentIdx && goal) ? now : null,
+        input_data: null,
+        output_data: null,
+        error_message: null,
+      };
     }
 
-    // If we have goal, mark goal phase as done
-    if (goal) {
-      phaseStatuses["goal"] = "done";
-    }
-
-    return {
+    const state: ProjectState = {
       name,
-      projectPath,
-      goal: goal ?? undefined,
-      currentPhase,
-      phaseStatuses,
-      hasPlan: planSections.length > 0,
-      hasSpec: specModules.length > 0,
+      current_phase: currentPhase,
+      status: "active",
+      created_at: now,
+      updated_at: now,
+      completed_at: null,
+      phases,
     };
+    this.writeState(state);
+    return state;
+  }
+
+  /** Get or create state — reads state.json, rebuilds if missing */
+  getOrCreateState(): ProjectState {
+    let state = this.readState();
+    if (!state) {
+      state = this.rebuildState();
+    }
+    if (!state) {
+      state = this.initProject(basename(this.getProjectPath()));
+    }
+    return state;
+  }
+
+  /** Update project metadata in state.json */
+  updateProjectMeta(updates: Partial<Pick<ProjectState, "name" | "current_phase" | "status" | "completed_at">>): void {
+    const state = this.getOrCreateState();
+    this.writeState({ ...state, ...updates, updated_at: new Date().toISOString() });
+  }
+
+  // --- Phase State ---
+
+  /** Get phase state info */
+  getPhaseStateInfo(phase: ProjectPhase): PhaseStateInfo | undefined {
+    const state = this.readState();
+    return state?.phases[phase];
+  }
+
+  /** Set phase state */
+  setPhaseState(
+    phase: ProjectPhase,
+    status: PhaseStateStatus,
+    data?: { input_data?: string; output_data?: string; error_message?: string },
+  ): void {
+    const state = this.getOrCreateState();
+    const now = new Date().toISOString();
+    const existing = state.phases[phase] ?? { status: "pending" as PhaseStateStatus, started_at: null, completed_at: null, input_data: null, output_data: null, error_message: null };
+
+    const updated: PhaseStateInfo = {
+      ...existing,
+      status,
+      started_at: status === "in_progress" && !existing.started_at ? now : existing.started_at,
+      completed_at: status === "done" || status === "failed" ? now : existing.completed_at,
+    };
+
+    if (data?.input_data !== undefined) updated.input_data = data.input_data;
+    if (data?.output_data !== undefined) updated.output_data = data.output_data;
+    if (data?.error_message !== undefined) updated.error_message = data.error_message;
+
+    state.phases[phase] = updated;
+    state.updated_at = now;
+    this.writeState(state);
+  }
+
+  /** Get all phase states as an array */
+  getAllPhaseStates(): Array<{ phase: ProjectPhase; status: PhaseStateStatus; started_at: string | null; completed_at: string | null; input_data: string | null; output_data: string | null; error_message: string | null }> {
+    const state = this.readState();
+    if (!state) return [];
+    return PHASE_ORDER.map(phase => {
+      const info = state.phases[phase] ?? { status: "pending" as PhaseStateStatus };
+      return {
+        phase,
+        status: info.status,
+        started_at: info.started_at ?? null,
+        completed_at: info.completed_at ?? null,
+        input_data: info.input_data ?? null,
+        output_data: info.output_data ?? null,
+        error_message: info.error_message ?? null,
+      };
+    });
+  }
+
+  // --- Logging ---
+
+  /** Append a log entry */
+  addLog(agent: string, level: "info" | "warn" | "error" | "debug", message: string, phase?: string): void {
+    this.init();
+    const entry: LogEntry = {
+      ts: new Date().toISOString(),
+      level,
+      agent,
+      ...(phase ? { phase } : {}),
+      message,
+    };
+    const logFile = join(this.basePath, "logs", "project.jsonl");
+    appendFileSync(logFile, JSON.stringify(entry) + "\n");
+  }
+
+  /** Get recent log entries */
+  getLogs(limit = 100): LogEntry[] {
+    const logFile = join(this.basePath, "logs", "project.jsonl");
+    if (!existsSync(logFile)) return [];
+    const lines = readFileSync(logFile, "utf-8").trim().split("\n").filter(Boolean);
+    return lines.slice(-limit).map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean) as LogEntry[];
   }
 
   // --- Goal ---
@@ -134,6 +278,12 @@ export class FileStore {
       metadata.created = new Date().toISOString();
     }
     writeParsedFile(join(this.basePath, "goal.md"), metadata, content);
+    // Also update state.json goal tracking
+    const state = this.readState();
+    if (state) {
+      state.updated_at = new Date().toISOString();
+      this.writeState(state);
+    }
     this.tryAutoCommit("set goal");
   }
 
@@ -276,6 +426,56 @@ export class FileStore {
     return { total, done };
   }
 
+  /**
+   * Scan .fbloom/ files and return import metadata.
+   * Used to rebuild state from existing files.
+   */
+  scanForImport(): ImportedProjectData {
+    const projectPath = this.getProjectPath();
+    const name = basename(projectPath);
+    const goal = this.readGoal();
+    const specModules = this.listSpecModules();
+    const planSections = this.readPlan();
+
+    let currentPhase = "goal";
+    if (planSections.length > 0) {
+      currentPhase = "plan";
+      const devSection = planSections.find(s => s.phase.toLowerCase() === "dev");
+      if (devSection?.items.some(i => i.checked)) {
+        currentPhase = "dev";
+      }
+    } else if (specModules.length > 0) {
+      currentPhase = "spec";
+    }
+
+    const phaseStatuses: Record<string, string> = {};
+    const phases = ["goal", "spec", "plan", "dev", "test", "review", "deploy"];
+    const completedUpTo = phases.indexOf(currentPhase);
+    for (let i = 0; i < phases.length; i++) {
+      if (i < completedUpTo) {
+        phaseStatuses[phases[i]] = "done";
+      } else if (i === completedUpTo) {
+        phaseStatuses[phases[i]] = goal ? "done" : "pending";
+      } else {
+        phaseStatuses[phases[i]] = "pending";
+      }
+    }
+
+    if (goal) {
+      phaseStatuses["goal"] = "done";
+    }
+
+    return {
+      name,
+      projectPath,
+      goal: goal ?? undefined,
+      currentPhase,
+      phaseStatuses,
+      hasPlan: planSections.length > 0,
+      hasSpec: specModules.length > 0,
+    };
+  }
+
   // --- Git ---
 
   async commitAll(message: string): Promise<void> {
@@ -304,7 +504,6 @@ export class FileStore {
 
   private tryAutoCommit(message: string): void {
     if (!this.autoCommit) return;
-    // Fire-and-forget async commit
     this.commitAll(message).catch(() => {
       // Silently fail if not a git repo or commit fails
     });
@@ -321,7 +520,6 @@ function parsePlan(text: string): PlanSection[] {
   let currentItem: PlanItem | null = null;
 
   for (const line of lines) {
-    // Section heading: ## Dev
     const sectionMatch = line.match(/^##\s+(.+)/);
     if (sectionMatch) {
       currentSection = { phase: sectionMatch[1].trim(), items: [] };
@@ -330,7 +528,6 @@ function parsePlan(text: string): PlanSection[] {
       continue;
     }
 
-    // Checkbox: - [ ] or - [x]
     const checkMatch = line.match(/^-\s+\[([ xX])\]\s+(.+)/);
     if (checkMatch && currentSection) {
       const checked = checkMatch[1].toLowerCase() === "x";
@@ -345,14 +542,12 @@ function parsePlan(text: string): PlanSection[] {
       continue;
     }
 
-    // HTML comment with id: <!-- id: xxx -->
     const idMatch = line.match(/<!--\s*fbloom-id:\s*(.+?)\s*-->/);
     if (idMatch && currentItem) {
       currentItem.id = idMatch[1].trim();
       continue;
     }
 
-    // Description line (indented under checkbox)
     if (currentItem && line.match(/^\s{2,}/)) {
       currentItem.description += (currentItem.description ? "\n" : "") + line.trim();
     }

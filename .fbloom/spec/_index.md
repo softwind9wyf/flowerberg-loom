@@ -7,6 +7,6 @@ updated: "2026-04-04T16:00:00.000Z"
 ## Modules
 - [overview](overview.md) — Core value proposition, module architecture, data flow
 - [architecture](architecture.md) — Component diagram, design decisions, tech stack
-- [data-model](data-model.md) — SQLite schema, FileStore structure, frontmatter format, sessions
+- [data-model](data-model.md) — FileStore structure, state.json, frontmatter format, sessions, logs
 - [interface](interface.md) — CLI commands, TUI slash commands, agent interface, events, config
 - [testing](testing.md) — Test coverage, approach, criteria per module

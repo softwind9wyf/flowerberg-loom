@@ -4,7 +4,6 @@ import type { ProjectPhase } from "../types/project.js";
 import type { AgentInterface } from "../types/agent.js";
 import type { AppConfig, DeployConfig } from "../types/config.js";
 import type { ProjectEvent } from "../types/events.js";
-import type { Store } from "../store/index.js";
 import type { FileStore } from "../store/file-store.js";
 import type { PhaseResult } from "./state-machine.js";
 import { execCommand } from "./exec.js";
@@ -14,11 +13,9 @@ import {
 } from "../agents/prompt-templates.js";
 
 export interface PhaseHandlerContext {
-  projectId: string;
   projectPath: string;
   goal: string | null;
-  store: Store;
-  fileStore: FileStore | null;
+  fileStore: FileStore;
   agent: AgentInterface;
   config: AppConfig;
   getPhaseOutput: (phase: ProjectPhase) => string | null;
@@ -66,23 +63,15 @@ export class SpecPhaseHandler implements PhaseHandler {
       return { success: false, error: result.error };
     }
 
-    ctx.store.createSpec({
-      project_id: ctx.projectId,
-      content: result.output,
-      ai_generated: true,
-    });
-
-    // Also write to FileStore if available
-    if (ctx.fileStore) {
-      const modules = splitSpecIntoModules(result.output);
-      const moduleNames: string[] = [];
-      for (const [name, content] of modules) {
-        ctx.fileStore.writeSpecModule(name, content);
-        moduleNames.push(name);
-      }
-      ctx.fileStore.writeSpecIndex(moduleNames);
-      ctx.fileStore.commitSpec();
+    // Write spec modules to FileStore
+    const modules = splitSpecIntoModules(result.output);
+    const moduleNames: string[] = [];
+    for (const [name, content] of modules) {
+      ctx.fileStore.writeSpecModule(name, content);
+      moduleNames.push(name);
     }
+    ctx.fileStore.writeSpecIndex(moduleNames);
+    ctx.fileStore.commitSpec();
 
     return {
       success: true,
@@ -128,29 +117,9 @@ export class PlanPhaseHandler implements PhaseHandler {
       return { success: false, error: "No plan steps generated" };
     }
 
-    const createdIds: string[] = [];
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      const deps = (step.depends_on || [])
-        .filter((idx: number) => idx < createdIds.length)
-        .map((idx: number) => createdIds[idx]);
-
-      const created = ctx.store.createPlanStep({
-        project_id: ctx.projectId,
-        phase: step.phase || "dev",
-        sequence: i,
-        title: step.title,
-        description: step.description,
-        depends_on: deps,
-      });
-      createdIds.push(created.id);
-    }
-
-    // Also write to FileStore if available
-    if (ctx.fileStore) {
-      const planMd = buildPlanMarkdown(steps);
-      ctx.fileStore.writePlanRaw(planMd);
-    }
+    // Write plan markdown to FileStore
+    const planMd = buildPlanMarkdown(steps);
+    ctx.fileStore.writePlanRaw(planMd);
 
     return { success: true, output: `Created ${steps.length} plan steps` };
   }
@@ -189,7 +158,7 @@ export class DeployPhaseHandler implements PhaseHandler {
     const cwd = ctx.projectPath;
 
     // Check if we're resuming after human confirmation
-    const phaseState = ctx.store.getPhaseState(ctx.projectId, "deploy");
+    const phaseState = ctx.fileStore.getPhaseStateInfo("deploy");
     const inputData = phaseState?.input_data ? JSON.parse(phaseState.input_data) : null;
 
     if (inputData?.confirmed) {
@@ -201,14 +170,14 @@ export class DeployPhaseHandler implements PhaseHandler {
     // Step 1: Verify build
     if (deployConfig.verifyBuild !== false) {
       const buildCmd = deployConfig.buildCommand || "npm run build";
-      ctx.emit({ type: "log", projectId: ctx.projectId, message: `Verifying build: ${buildCmd}`, level: "info" });
+      ctx.emit({ type: "log", projectId: "", message: `Verifying build: ${buildCmd}`, level: "info" });
 
       const parts = buildCmd.split(" ");
       const buildResult = await execCommand(parts[0], parts.slice(1), cwd);
       if (buildResult.exitCode !== 0) {
         return { success: false, error: `Build verification failed:\n${buildResult.stderr || buildResult.stdout}` };
       }
-      ctx.emit({ type: "log", projectId: ctx.projectId, message: "Build verified successfully", level: "info" });
+      ctx.emit({ type: "log", projectId: "", message: "Build verified successfully", level: "info" });
     }
 
     // Step 2: Check git status
@@ -292,12 +261,12 @@ export class DeployPhaseHandler implements PhaseHandler {
     const branch = deployConfig.branch || (branchResult.exitCode === 0 ? branchResult.stdout.trim() : "main");
 
     // Push
-    ctx.emit({ type: "log", projectId: ctx.projectId, message: `Pushing to ${remote}/${branch}...`, level: "info" });
+    ctx.emit({ type: "log", projectId: "", message: `Pushing to ${remote}/${branch}...`, level: "info" });
     const pushResult = await execCommand("git", ["push", remote, branch], cwd);
     if (pushResult.exitCode !== 0) {
       return { success: false, error: `git push failed:\n${pushResult.stderr}` };
     }
-    ctx.emit({ type: "log", projectId: ctx.projectId, message: "Push successful", level: "info" });
+    ctx.emit({ type: "log", projectId: "", message: "Push successful", level: "info" });
 
     // Create release
     const shouldCreateRelease = deployConfig.createRelease !== false;
@@ -313,7 +282,7 @@ export class DeployPhaseHandler implements PhaseHandler {
       const tagPrefix = deployConfig.tagPrefix ?? "v";
       const tag = `${tagPrefix}${version}`;
 
-      ctx.emit({ type: "log", projectId: ctx.projectId, message: `Creating GitHub release ${tag}...`, level: "info" });
+      ctx.emit({ type: "log", projectId: "", message: `Creating GitHub release ${tag}...`, level: "info" });
       const releaseResult = await execCommand("gh", [
         "release", "create", tag,
         "--title", tag,
@@ -322,9 +291,9 @@ export class DeployPhaseHandler implements PhaseHandler {
 
       if (releaseResult.exitCode !== 0) {
         releaseWarning = `Release creation failed: ${releaseResult.stderr}`;
-        ctx.emit({ type: "log", projectId: ctx.projectId, message: releaseWarning, level: "warn" });
+        ctx.emit({ type: "log", projectId: "", message: releaseWarning, level: "warn" });
       } else {
-        ctx.emit({ type: "log", projectId: ctx.projectId, message: `Release ${tag} created`, level: "info" });
+        ctx.emit({ type: "log", projectId: "", message: `Release ${tag} created`, level: "info" });
       }
     }
 
@@ -344,14 +313,13 @@ function splitSpecIntoModules(text: string): [string, string][] {
     const headingMatch = part.match(/^##\s+(.+)/);
     if (headingMatch) {
       const title = headingMatch[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-      const content = part.replace(/^##\s+.+\n?/, "").trim();
+      const content = part.replace(/^##\+.+\n?/, "").trim();
       if (title && content) {
         modules.push([`${title}.md`, content]);
       }
     }
   }
 
-  // If no ## headings found, treat entire text as "overview"
   if (modules.length === 0 && text.trim()) {
     modules.push(["overview.md", text.trim()]);
   }
@@ -385,52 +353,40 @@ async function executeAutonomousPhase(
   ctx: PhaseHandlerContext,
   phaseType: string,
 ): Promise<PhaseResult> {
-  const readySteps = ctx.store.getReadyPlanSteps(ctx.projectId, phaseType as ProjectPhase);
+  // Read plan from FileStore and find pending steps for this phase
+  const sections = ctx.fileStore.readPlan();
+  const phaseSection = sections.find(s => s.phase.toLowerCase() === phaseType);
 
-  if (readySteps.length === 0) {
-    const allSteps = ctx.store.getPlanSteps(ctx.projectId)
-      .filter((s) => s.phase === phaseType);
-
-    if (allSteps.length === 0) {
-      return { success: true, output: `No plan steps for ${phaseType} phase, skipping.` };
-    }
-    if (allSteps.every((s) => s.status === "done")) {
-      return { success: true, output: `All ${phaseType} steps completed.` };
-    }
-    return { success: false, error: `No ready steps for ${phaseType} phase. Dependencies not met.` };
+  if (!phaseSection || phaseSection.items.length === 0) {
+    return { success: true, output: `No plan steps for ${phaseType} phase, skipping.` };
   }
 
-  const results: string[] = [];
-  for (const step of readySteps) {
-    ctx.store.updatePlanStepStatus(step.id, "in_progress");
-
-    const siblings = ctx.store.getPlanSteps(ctx.projectId);
-    const contextParts: string[] = [];
-    for (const depId of JSON.parse(step.depends_on as unknown as string) as string[]) {
-      const dep = siblings.find((s) => s.id === depId);
-      if (dep?.result) {
-        contextParts.push(`--- Completed: "${dep.title}" ---\n${dep.result}`);
-      }
-    }
-    const context = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
-
-    const agentType = phaseType === "dev" ? "code" : phaseType === "test" ? "test" : phaseType === "review" ? "review" : "deploy";
-
-    const result = await ctx.agent.run({
-      type: agentType,
-      prompt: step.description,
-      cwd: ctx.projectPath,
-      context,
-    });
-
-    if (!result.success) {
-      ctx.store.updatePlanStepStatus(step.id, "failed", undefined, result.error);
-      return { success: false, error: `Step "${step.title}" failed: ${result.error}` };
-    }
-
-    ctx.store.updatePlanStepStatus(step.id, "done", result.output);
-    results.push(`[${step.title}] ${result.output.slice(0, 100)}`);
+  if (phaseSection.items.every(i => i.checked)) {
+    return { success: true, output: `All ${phaseType} steps completed.` };
   }
 
-  return { success: true, output: results.join("\n") };
+  // Find the first pending step
+  const pendingStep = phaseSection.items.find(i => !i.checked);
+  if (!pendingStep) {
+    return { success: false, error: `No ready steps for ${phaseType} phase.` };
+  }
+
+  const agentType = phaseType === "dev" ? "code" : phaseType === "test" ? "test" : phaseType === "review" ? "review" : "deploy";
+
+  const result = await ctx.agent.run({
+    type: agentType,
+    prompt: pendingStep.description || pendingStep.title,
+    cwd: ctx.projectPath,
+  });
+
+  if (!result.success) {
+    return { success: false, error: `Step "${pendingStep.title}" failed: ${result.error}` };
+  }
+
+  // Mark step as done in FileStore
+  const sectionIdx = sections.indexOf(phaseSection);
+  const stepIdx = phaseSection.items.indexOf(pendingStep);
+  ctx.fileStore.markStepDone(sectionIdx, stepIdx);
+
+  return { success: true, output: `[${pendingStep.title}] ${result.output.slice(0, 100)}` };
 }

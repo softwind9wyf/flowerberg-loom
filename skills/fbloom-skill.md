@@ -35,11 +35,12 @@ Generate a Claude Code skill file (`.claude/commands/fbloom.md`) that summarizes
 
 ## Instructions
 When working on this project:
-1. Read relevant spec files in .fbloom/spec/ for detailed requirements
-2. Check .fbloom/plan.md for implementation plan
-3. Follow conventions from .fbloom/context.md
-4. Focus on: <current incomplete plan steps>
-5. After completing work, mark plan steps done in .fbloom/plan.md
+1. **设计改动必须先改 spec**：任何设计层面的改动（架构、接口、数据模型、行为变更等），必须先修改 `.fbloom/spec/` 下的相关规格文档，确认无误后，再根据 spec 修改代码。禁止直接改代码而不更新 spec。
+2. Read relevant spec files in .fbloom/spec/ for detailed requirements
+3. Check .fbloom/plan.md for implementation plan
+4. Follow conventions from .fbloom/context.md
+5. Focus on: <current incomplete plan steps>
+6. After completing work, mark plan steps done in .fbloom/plan.md
 
 $ARGUMENTS
 ```

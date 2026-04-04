@@ -1,13 +1,11 @@
 import type {
-  Project,
   ProjectPhase,
   ProjectStatus,
-  PhaseState,
-  PhaseStateStatus,
+  PhaseStateInfo,
   PhaseInteraction,
 } from "../types/project.js";
 import { PHASE_ORDER, PHASE_INTERACTION } from "../types/project.js";
-import type { Store } from "../store/index.js";
+import type { FileStore } from "../store/file-store.js";
 
 export interface PhaseResult {
   success: boolean;
@@ -18,28 +16,26 @@ export interface PhaseResult {
 }
 
 export class PhaseStateMachine {
-  private store: Store;
-  private projectId: string;
+  private fileStore: FileStore;
 
-  constructor(store: Store, projectId: string) {
-    this.store = store;
-    this.projectId = projectId;
+  constructor(fileStore: FileStore) {
+    this.fileStore = fileStore;
   }
 
   /** Get the project's current phase */
   getCurrentPhase(): ProjectPhase {
-    const project = this.store.getProject(this.projectId);
-    return project?.current_phase ?? "goal";
+    const state = this.fileStore.readState();
+    return state?.current_phase ?? "goal";
   }
 
   /** Get phase state for a specific phase */
-  getPhaseState(phase: ProjectPhase): PhaseState | undefined {
-    return this.store.getPhaseState(this.projectId, phase);
+  getPhaseState(phase: ProjectPhase): PhaseStateInfo | undefined {
+    return this.fileStore.getPhaseStateInfo(phase);
   }
 
   /** Get all phase states */
-  getAllPhaseStates(): PhaseState[] {
-    return this.store.getAllPhaseStates(this.projectId);
+  getAllPhaseStates(): PhaseStateInfo[] {
+    return this.fileStore.getAllPhaseStates();
   }
 
   /** Check if current phase needs human input */
@@ -68,19 +64,19 @@ export class PhaseStateMachine {
 
     if (currentIdx === -1 || currentIdx >= PHASE_ORDER.length - 1) {
       // All phases done
-      this.store.updateProject(this.projectId, { status: "completed" });
+      this.fileStore.updateProjectMeta({ status: "completed", completed_at: new Date().toISOString() });
       return null;
     }
 
     const nextPhase = PHASE_ORDER[currentIdx + 1];
-    this.store.updateProject(this.projectId, { current_phase: nextPhase });
+    this.fileStore.updateProjectMeta({ current_phase: nextPhase });
     return nextPhase;
   }
 
   /** Mark phase as waiting for human input */
   waitForHumanInput(prompt: string): void {
     const phase = this.getCurrentPhase();
-    this.store.setPhaseState(this.projectId, phase, "waiting_input", {
+    this.fileStore.setPhaseState(phase, "waiting_input", {
       output_data: JSON.stringify({ prompt }),
     });
   }
@@ -90,27 +86,26 @@ export class PhaseStateMachine {
     const phase = this.getCurrentPhase();
     const phaseState = this.getPhaseState(phase);
 
-    // Store the input
-    this.store.setPhaseState(this.projectId, phase, phaseState?.status === "waiting_input" ? "in_progress" : "pending", {
+    this.fileStore.setPhaseState(phase, phaseState?.status === "waiting_input" ? "in_progress" : "pending", {
       input_data: JSON.stringify({ input }),
     });
   }
 
   /** Start a phase */
   startPhase(phase: ProjectPhase): void {
-    this.store.setPhaseState(this.projectId, phase, "in_progress");
+    this.fileStore.setPhaseState(phase, "in_progress");
   }
 
   /** Complete a phase */
   completePhase(phase: ProjectPhase, output?: string): void {
-    this.store.setPhaseState(this.projectId, phase, "done", {
+    this.fileStore.setPhaseState(phase, "done", {
       output_data: output ?? undefined,
     });
   }
 
   /** Fail a phase */
   failPhase(phase: ProjectPhase, error: string): void {
-    this.store.setPhaseState(this.projectId, phase, "failed", {
+    this.fileStore.setPhaseState(phase, "failed", {
       error_message: error,
     });
   }

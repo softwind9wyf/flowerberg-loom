@@ -22,34 +22,45 @@ updated: "2026-04-04T16:00:00.000Z"
 │  SessionStore       │  │                      │
 └──────────┬──────────┘  └────────┬────────────┘
            │                      │
-      ┌────┴──────┐       ┌──────┴──────────┐
-      │ FileStore  │       │  PhaseHandlers  │
-      │ (.fbloom/) │       │ (goal/spec/plan │
-      │            │       │  dev/test/review │
-      └────────────┘       │  /deploy)        │
-                           └──────┬──────────┘
-                                  │
-                    ┌─────────────┼──────────────┐
-                    │             │              │
-              ┌─────▼─────┐ ┌────▼─────┐ ┌──────▼──────┐
-              │  Store     │ │  Agent   │ │  GitWorktree │
-              │  (SQLite)  │ │ Factory  │ │  Manager     │
-              └────────────┘ └────┬─────┘ └──────────────┘
-                                  │
-                        ┌─────────┼─────────┐
-                        │                   │
-                  ┌─────▼──────┐    ┌───────▼──────┐
-                  │ ApiAgent   │    │ ClaudeCliAgent│
-                  │(Anthropic/ │    │ (claude CLI)  │
-                  │ OpenAI)    │    │               │
-                  └────────────┘    └──────────────┘
+      ┌────┴──────────────────────┴──────────┐
+      │              FileStore                │
+      │              (.fbloom/)               │
+      │  state.json + goal.md + spec/        │
+      │  plan.md + sessions/ + logs/         │
+      └──────────────────────────────────────┘
+                        │
+           ┌────────────┼────────────────┐
+           │            │                │
+     ┌─────▼─────┐ ┌───▼───────┐ ┌──────▼──────┐
+     │ Phase      │ │  Agent    │ │ GitWorktree  │
+     │ Handlers   │ │ Factory   │ │ Manager      │
+     └───────────┘ └────┬──────┘ └──────────────┘
+                       │
+             ┌─────────┼─────────┐
+             │                   │
+       ┌─────▼──────┐    ┌──────▼───────┐
+       │ ApiAgent   │    │ ClaudeCliAgent│
+       │(Anthropic/ │    │ (claude CLI)  │
+       │ OpenAI)    │    │               │
+       └────────────┘    └──────────────┘
 ```
 
 ## Key Design Decisions
 
-### Dual Storage
-- **SQLite** (`session-store.ts`): Runtime state — projects, phase states, spec documents, plan steps, logs. Fast queries, joins, migrations.
-- **FileStore** (`file-store.ts`): Human-readable documents — goal, context, specs, plan. YAML frontmatter + markdown body. Git-friendly.
+### File-Based Storage (No Database)
+
+All project state lives in `.fbloom/` as files:
+- **state.json**: Project metadata and phase progress (lightweight index, rebuildable from other files)
+- **Markdown files** (goal.md, spec/*.md, plan.md): Human-readable, git-friendly, editable with any editor
+- **sessions/**: Chat history as JSON files with optional AI compression
+- **logs/**: Runtime logs as JSON Lines files
+
+**Why no database:**
+- Files are source of truth — DB was just an index
+- Git already provides version history (no need for spec versioning in DB)
+- Project portability — clone, branch switch, everything works
+- No native dependency (better-sqlite3) — simpler install
+- `state.json` is rebuildable from file presence, never a single point of failure
 
 ### Agent Abstraction
 - `AgentInterface` defines `run()`, `decompose()`, `isAvailable()` methods
@@ -79,7 +90,7 @@ updated: "2026-04-04T16:00:00.000Z"
 - **Runtime**: Node.js 18+ (ESM, TypeScript strict)
 - **Build**: tsup
 - **TUI**: Ink v6 + React 19
-- **Database**: better-sqlite3 (synchronous, embedded)
+- **Storage**: File-based only (JSON + Markdown + YAML frontmatter)
 - **CLI**: Commander.js
 - **AI**: Anthropic API / OpenAI API / Claude Code CLI
 - **Git**: git worktree for isolation, gh CLI for releases

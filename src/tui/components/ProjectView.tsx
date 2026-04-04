@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, useInput } from "ink";
 import type { Project, ProjectPhase } from "../../types/project.js";
-import type { PlanStep } from "../../types/plan.js";
 import type { ProjectEvent } from "../../types/events.js";
-import type { Store } from "../../store/index.js";
+import { FileStore } from "../../store/file-store.js";
 import { PhaseStatus } from "./PhaseStatus.js";
 import { GoalInput } from "./GoalInput.js";
 import { SpecEditor } from "./SpecEditor.js";
@@ -13,18 +12,18 @@ import { HumanPrompt } from "./HumanPrompt.js";
 
 interface ProjectViewProps {
   project: Project;
-  store: Store;
-  onProvideInput: (projectId: string, input: string) => void;
-  onSetGoal: (projectId: string, goal: string) => void;
-  onApproveSpec: (projectId: string) => void;
-  onRequestSpecChanges: (projectId: string, feedback: string) => void;
+  fileStore: FileStore;
+  onProvideInput: (fileStore: FileStore, input: string) => void;
+  onSetGoal: (fileStore: FileStore, goal: string) => void;
+  onApproveSpec: (fileStore: FileStore) => void;
+  onRequestSpecChanges: (fileStore: FileStore, feedback: string) => void;
   onEvent?: (handler: (event: ProjectEvent) => void) => () => void;
   onBack: () => void;
 }
 
 export function ProjectView({
   project,
-  store,
+  fileStore,
   onProvideInput,
   onSetGoal,
   onApproveSpec,
@@ -33,10 +32,10 @@ export function ProjectView({
   onBack,
 }: ProjectViewProps) {
   const [phaseStates, setPhaseStates] = useState(
-    store.getAllPhaseStates(project.id),
+    fileStore.getAllPhaseStates(),
   );
-  const [planSteps, setPlanSteps] = useState<PlanStep[]>(
-    store.getPlanSteps(project.id),
+  const [planSections, setPlanSections] = useState(
+    fileStore.readPlan(),
   );
   const [specContent, setSpecContent] = useState<string | null>(null);
   const [outputChunks, setOutputChunks] = useState<string[]>([]);
@@ -44,30 +43,30 @@ export function ProjectView({
   // Refresh state periodically
   useEffect(() => {
     const refresh = () => {
-      const updated = store.getProject(project.id);
-      if (!updated) return;
-      setPhaseStates(store.getAllPhaseStates(project.id));
-      setPlanSteps(store.getPlanSteps(project.id));
+      const state = fileStore.readState();
+      if (!state) return;
+      setPhaseStates(fileStore.getAllPhaseStates());
+      setPlanSections(fileStore.readPlan());
 
-      const spec = store.getLatestSpec(project.id);
-      if (spec) setSpecContent(spec.content);
+      const spec = fileStore.getFullSpec();
+      if (spec) setSpecContent(spec);
     };
 
     refresh();
     const interval = setInterval(refresh, 1000);
     return () => clearInterval(interval);
-  }, [project.id, store]);
+  }, [fileStore]);
 
   // Listen to orchestrator events for streaming output
   useEffect(() => {
     if (!onEvent) return;
     const unsub = onEvent((event: ProjectEvent) => {
-      if (event.type === "agent_output" && event.projectId === project.id) {
+      if (event.type === "agent_output") {
         setOutputChunks((prev) => [...prev, event.chunk]);
       }
     });
     return unsub;
-  }, [project.id, onEvent]);
+  }, [onEvent]);
 
   useInput(useCallback((ch, key) => {
     if (key.escape || ch === "q") {
@@ -86,6 +85,25 @@ export function ProjectView({
     (s) => s.phase === currentPhase && s.status === "waiting_input",
   );
 
+  // Flatten plan sections for PlanView compatibility
+  const planSteps = planSections.flatMap((s) =>
+    s.items.map((item) => ({
+      id: item.id,
+      project_id: "",
+      phase: s.phase.toLowerCase() as ProjectPhase,
+      sequence: 0,
+      title: item.title,
+      description: item.description,
+      status: item.checked ? "done" as const : "pending" as const,
+      depends_on: [],
+      assigned_agent: null,
+      result: null,
+      error_message: null,
+      started_at: null,
+      completed_at: null,
+    }))
+  );
+
   return (
     <Box flexDirection="column" padding={1}>
       <Box borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={1}>
@@ -98,7 +116,7 @@ export function ProjectView({
       <Box marginTop={1}>
         {currentPhase === "goal" && !project.goal && (
           <GoalInput
-            onSubmit={(goal) => onSetGoal(project.id, goal)}
+            onSubmit={(goal) => onSetGoal(fileStore, goal)}
           />
         )}
         {currentPhase === "goal" && project.goal && !needsInput && (
@@ -110,8 +128,8 @@ export function ProjectView({
         {currentPhase === "spec" && specContent && needsInput && (
           <SpecEditor
             specContent={specContent}
-            onApprove={() => onApproveSpec(project.id)}
-            onRequestChanges={(fb) => onRequestSpecChanges(project.id, fb)}
+            onApprove={() => onApproveSpec(fileStore)}
+            onRequestChanges={(fb) => onRequestSpecChanges(fileStore, fb)}
           />
         )}
         {(currentPhase === "dev" || currentPhase === "test" || currentPhase === "review") && (
@@ -124,7 +142,7 @@ export function ProjectView({
                 return JSON.parse(needsInput.output_data ?? "{}").prompt ?? "Input required";
               } catch { return "Input required"; }
             })()}
-            onSubmit={(input) => onProvideInput(project.id, input)}
+            onSubmit={(input) => onProvideInput(fileStore, input)}
           />
         )}
         {(currentPhase === "dev" || currentPhase === "test" || currentPhase === "review") && (

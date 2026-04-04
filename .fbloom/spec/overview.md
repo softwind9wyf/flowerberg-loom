@@ -12,7 +12,8 @@ fbloom is a CLI/TUI tool that orchestrates the full software development lifecyc
 1. **Single tool, full pipeline** — from idea to deployed code
 2. **Human-in-the-loop** — humans approve specs, review plans, confirm deployments
 3. **AI-autonomous execution** — dev, test, and review phases run without human intervention
-4. **File-based transparency** — all documents are markdown in `.fbloom/`, editable with any editor, versioned with git
+4. **File-based transparency** — all state is markdown/JSON in `.fbloom/`, editable with any editor, versioned with git
+5. **Fully portable** — clone the repo and resume work, no database setup needed
 
 ## Target Users
 
@@ -27,7 +28,7 @@ fbloom is a CLI/TUI tool that orchestrates the full software development lifecyc
 | agents | AI agent abstraction (CLI, API, factory) | types/agent, types/config |
 | cli | Commander.js entry point and subcommands | store, orchestrator, tui |
 | orchestrator | Phase lifecycle state machine and handlers | agents, store, git |
-| store | Dual persistence (SQLite + FileStore + SessionStore) | types/* |
+| store | File-based persistence (FileStore + SessionStore) | types/* |
 | tui | Ink-based chat interface and slash commands | store, orchestrator |
 | types | Shared TypeScript type definitions | — |
 
@@ -36,12 +37,13 @@ fbloom is a CLI/TUI tool that orchestrates the full software development lifecyc
 ```
 User → CLI/TUI → Orchestrator → PhaseHandler → Agent → Code
                                     ↕
-                          Store (SQLite + FileStore)
+                            FileStore (.fbloom/)
 ```
 
 1. User interacts via CLI commands or TUI chat
-2. Orchestrator manages phase state machine
+2. Orchestrator manages phase state machine (state tracked in `state.json`)
 3. Phase handlers delegate work to AI agents
-4. Store persists state (SQLite) and documents (FileStore)
-5. SessionStore tracks conversation history
-6. Events propagate updates to TUI in real-time
+4. FileStore persists all documents and state in `.fbloom/` directory
+5. SessionStore tracks conversation history in `sessions/`
+6. Runtime logs append to `logs/` directory
+7. Events propagate updates to TUI in real-time

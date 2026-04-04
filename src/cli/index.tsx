@@ -7,7 +7,6 @@ import type { AppConfig } from "../types/config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(resolve(__dirname, "../package.json"), "utf-8"));
-import { Store } from "../store/index.js";
 import { ProjectOrchestrator } from "../orchestrator/project.js";
 import { AgentFactory } from "../agents/factory.js";
 import { startProjectTUI, startChatTUI } from "../tui/index.js";
@@ -15,9 +14,7 @@ import { FileStore } from "../store/file-store.js";
 import type { Project, ProjectPhase } from "../types/project.js";
 import { installSkills } from "./skills.js";
 
-const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config/fbloom/config.json");
 const GLOBAL_FBLOOM_CONFIG = resolve(homedir(), ".fbloom/config.json");
-const DEFAULT_DB_PATH = resolve(homedir(), ".config/fbloom/loom.db");
 
 function loadJsonFile(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
@@ -29,14 +26,9 @@ function loadJsonFile(path: string): Record<string, unknown> {
 }
 
 function loadConfig(): AppConfig {
-  // Load configs in priority order: legacy ~/.config/fbloom → global ~/.fbloom
-  const legacyConfig = loadJsonFile(DEFAULT_CONFIG_PATH);
-  const globalConfig = loadJsonFile(GLOBAL_FBLOOM_CONFIG);
+  const globalConfig = loadJsonFile(GLOBAL_FBLOOM_CONFIG) as Partial<AppConfig>;
 
-  // Merge: global ~/.fbloom overrides legacy ~/.config/fbloom
-  const fileConfig = { ...legacyConfig, ...globalConfig } as Partial<AppConfig>;
-
-  const claudePath = fileConfig.claude_path || fileConfig.default_agent?.path || "claude";
+  const claudePath = globalConfig.claude_path || globalConfig.default_agent?.path || "claude";
 
   const config: AppConfig = {
     claude_path: claudePath,
@@ -44,11 +36,11 @@ function loadConfig(): AppConfig {
       type: "claude-cli",
       path: claudePath,
     },
-    agents: fileConfig.agents || [{ type: "claude-cli", path: claudePath }],
-    max_parallel_agents: fileConfig.max_parallel_agents || 3,
-    default_max_retries: fileConfig.default_max_retries || 3,
-    deploy: fileConfig.deploy || {},
-    ai: fileConfig.ai,
+    agents: globalConfig.agents || [{ type: "claude-cli", path: claudePath }],
+    max_parallel_agents: globalConfig.max_parallel_agents || 3,
+    default_max_retries: globalConfig.default_max_retries || 3,
+    deploy: globalConfig.deploy || {},
+    ai: globalConfig.ai,
   };
 
   return config;
@@ -56,11 +48,9 @@ function loadConfig(): AppConfig {
 
 /** Load AI config with project-level override from .fbloom/config.json */
 export function loadAiConfig(projectPath?: string): AppConfig["ai"] {
-  // Start with global config
   const config = loadConfig();
   let ai = config.ai;
 
-  // Override with project-level .fbloom/config.json
   if (projectPath) {
     const projectConfigPath = resolve(projectPath, ".fbloom/config.json");
     const projectConfig = loadJsonFile(projectConfigPath);
@@ -77,12 +67,6 @@ function ensureDir(filePath: string): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-}
-
-function createStore(): Store {
-  const dbPath = process.env.DEVFLOW_DB || DEFAULT_DB_PATH;
-  ensureDir(dbPath);
-  return new Store(dbPath);
 }
 
 export function createProgram(): Command {
@@ -102,20 +86,18 @@ export function createProgram(): Command {
     .option("-d, --description <desc>", "Project description", "")
     .action((targetPath: string, opts: { description: string }) => {
       const projectPath = resolve(targetPath);
-      const name = projectPath.split("/").pop() || "untitled";
 
       // Create directory if it doesn't exist
       if (!existsSync(projectPath)) {
         mkdirSync(projectPath, { recursive: true });
       }
 
-      const store = createStore();
       const config = loadConfig();
-      const orchestrator = new ProjectOrchestrator(config, store);
+      const orchestrator = new ProjectOrchestrator(config);
 
       try {
-        const project = orchestrator.createProject(name, projectPath, opts.description);
-        console.log(`Project created: ${project.name} (id: ${project.id})`);
+        const { project } = orchestrator.createProject(projectPath, opts.description);
+        console.log(`Project created: ${project.name}`);
         console.log(`Path: ${project.project_path}`);
 
         // Install fbloom skills to .claude/commands/
@@ -131,194 +113,77 @@ export function createProgram(): Command {
           console.log(`\n(Skills not installed: ${skillErr instanceof Error ? skillErr.message : String(skillErr)})`);
         }
 
-        console.log(`\nStart with: fbloom start ${project.id}`);
+        console.log(`\nRun "fbloom" in the project directory to start.`);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
         process.exit(1);
-      } finally {
-        store.close();
       }
     });
 
   program
-    .command("projects")
-    .description("List all projects")
-    .action(() => {
-      const store = createStore();
+    .command("status")
+    .description("Show project status for current or specified directory")
+    .argument("[path]", "Project directory (default: current dir)", ".")
+    .action((targetPath: string) => {
+      const projectPath = resolve(targetPath);
+      const fileStore = new FileStore(projectPath, false);
 
-      try {
-        const projects = store.listProjects();
-        if (projects.length === 0) {
-          console.log("No projects yet. Use: fbloom init <name>");
-          return;
-        }
-
-        console.log("Projects:\n");
-        for (const p of projects) {
-          const statusIcon = p.status === "completed" ? "✓" : p.status === "failed" ? "✗" : "●";
-          console.log(`  ${statusIcon} ${p.name} (${p.id.slice(0, 8)})`);
-          console.log(`    Phase: ${p.current_phase} | Status: ${p.status}`);
-          if (p.goal) console.log(`    Goal: ${p.goal.slice(0, 80)}${p.goal.length > 80 ? "..." : ""}`);
-          console.log("");
-        }
-      } finally {
-        store.close();
+      if (!fileStore.exists()) {
+        console.error(`No .fbloom/ directory found at ${projectPath}`);
+        process.exit(1);
       }
-    });
 
-  program
-    .command("start")
-    .description("Start or resume a project lifecycle")
-    .argument("<projectId>", "Project ID (or unique prefix)")
-    .action((projectId: string) => {
-      const store = createStore();
-      const config = loadConfig();
-      const orchestrator = new ProjectOrchestrator(config, store);
+      const state = fileStore.getOrCreateState();
+      const goal = fileStore.readGoal();
+      const phaseStates = fileStore.getAllPhaseStates();
+      const planSections = fileStore.readPlan();
 
-      try {
-        // Find project by ID or prefix
-        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
-        if (!project) {
-          console.error(`Project not found: ${projectId}`);
-          process.exit(1);
+      console.log(`\nProject: ${state.name}`);
+      console.log(`Status: ${state.status} | Current Phase: ${state.current_phase}`);
+      if (goal) console.log(`Goal: ${goal}`);
+
+      console.log("\nPhases:");
+      for (const ps of phaseStates) {
+        const icon = ps.status === "done" ? "✓" : ps.status === "failed" ? "✗" : ps.status === "in_progress" ? "▶" : ps.status === "waiting_input" ? "⏸" : "○";
+        console.log(`  ${icon} ${ps.phase}: ${ps.status}`);
+      }
+
+      if (planSections.length > 0) {
+        let total = 0;
+        let done = 0;
+        for (const s of planSections) {
+          for (const item of s.items) {
+            total++;
+            if (item.checked) done++;
+          }
         }
-
-        console.log(`Starting project: ${project.name}`);
-        console.log(`Phase: ${project.current_phase} | Status: ${project.status}`);
-
-        if (!project.goal) {
-          console.log("\nNo goal set. Use: fbloom goal <projectId> <goal>");
-          console.log("Or use the dashboard: fbloom dashboard");
-          return;
+        console.log(`\nPlan: ${done}/${total} steps completed`);
+        for (const s of planSections) {
+          for (const step of s.items) {
+            const icon = step.checked ? "✓" : "○";
+            console.log(`  ${icon} [${s.phase}] ${step.title}`);
+          }
         }
-
-        orchestrator.startProject(project.id);
-        console.log("Project started. Use `fbloom dashboard` to monitor progress.");
-      } finally {
-        // Don't close store — orchestrator is running async
       }
     });
 
   program
     .command("goal")
     .description("Set project goal")
-    .argument("<projectId>", "Project ID (or unique prefix)")
     .argument("<goal>", "Project goal description")
-    .action((projectId: string, goal: string) => {
-      const store = createStore();
-      const config = loadConfig();
-      const orchestrator = new ProjectOrchestrator(config, store);
+    .action((goal: string) => {
+      const cwd = process.cwd();
+      const fileStore = new FileStore(cwd, false);
 
-      try {
-        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
-        if (!project) {
-          console.error(`Project not found: ${projectId}`);
-          process.exit(1);
-        }
-
-        orchestrator.setGoal(project.id, goal);
-        console.log(`Goal set for project ${project.name}`);
-      } finally {
-        store.close();
-      }
-    });
-
-  program
-    .command("input")
-    .description("Provide human input for the current phase")
-    .argument("<projectId>", "Project ID (or unique prefix)")
-    .argument("<value>", "Input value")
-    .action((projectId: string, value: string) => {
-      const store = createStore();
-      const config = loadConfig();
-      const orchestrator = new ProjectOrchestrator(config, store);
-
-      try {
-        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
-        if (!project) {
-          console.error(`Project not found: ${projectId}`);
-          process.exit(1);
-        }
-
-        orchestrator.provideInput(project.id, value);
-        console.log(`Input provided for project ${project.name}`);
-      } catch (err) {
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      if (!fileStore.exists()) {
+        console.error(`No .fbloom/ directory found. Run "fbloom init ." first.`);
         process.exit(1);
-      } finally {
-        store.close();
       }
-    });
 
-  program
-    .command("status")
-    .description("Show project status")
-    .argument("<projectId>", "Project ID (or unique prefix)")
-    .action((projectId: string) => {
-      const store = createStore();
-
-      try {
-        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
-        if (!project) {
-          console.error(`Project not found: ${projectId}`);
-          process.exit(1);
-        }
-
-        const phaseStates = store.getAllPhaseStates(project.id);
-        const spec = store.getLatestSpec(project.id);
-        const planSteps = store.getPlanSteps(project.id);
-
-        console.log(`\nProject: ${project.name} (${project.id})`);
-        console.log(`Status: ${project.status} | Current Phase: ${project.current_phase}`);
-        if (project.goal) console.log(`Goal: ${project.goal}`);
-
-        console.log("\nPhases:");
-        for (const ps of phaseStates) {
-          const icon = ps.status === "done" ? "✓" : ps.status === "failed" ? "✗" : ps.status === "in_progress" ? "▶" : ps.status === "waiting_input" ? "⏸" : "○";
-          console.log(`  ${icon} ${ps.phase}: ${ps.status}`);
-        }
-
-        if (spec) {
-          console.log(`\nSpec: version ${spec.version} (${spec.status})`);
-        }
-
-        if (planSteps.length > 0) {
-          const done = planSteps.filter((s) => s.status === "done").length;
-          console.log(`\nPlan: ${done}/${planSteps.length} steps completed`);
-          for (const step of planSteps) {
-            const icon = step.status === "done" ? "✓" : step.status === "failed" ? "✗" : step.status === "in_progress" ? "▶" : "○";
-            console.log(`  ${icon} [${step.phase}] ${step.title}`);
-          }
-        }
-      } finally {
-        store.close();
-      }
-    });
-
-  // ---- Migrate ----
-
-  program
-    .command("migrate")
-    .description("Migrate project data from SQLite to file-based storage")
-    .argument("<projectId>", "Project ID (or unique prefix)")
-    .action((projectId: string) => {
-      const store = createStore();
-
-      try {
-        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
-        if (!project) {
-          console.error(`Project not found: ${projectId}`);
-          process.exit(1);
-        }
-
-        store.migrateProjectData(project.id, project.project_path);
-        console.log(`Migrated project "${project.name}" to file-based storage (.fbloom/)`);
-      } catch (err) {
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      } finally {
-        store.close();
-      }
+      const config = loadConfig();
+      const orchestrator = new ProjectOrchestrator(config);
+      orchestrator.setGoal(fileStore, goal);
+      console.log(`Goal saved for project ${fileStore.readState()?.name}`);
     });
 
   // ---- Dashboard (TUI) ----
@@ -327,9 +192,8 @@ export function createProgram(): Command {
     .command("dashboard")
     .description("Open interactive TUI dashboard")
     .action(() => {
-      const store = createStore();
       const config = loadConfig();
-      const orchestrator = new ProjectOrchestrator(config, store);
+      const orchestrator = new ProjectOrchestrator(config);
       startProjectTUI(orchestrator);
     });
 
@@ -348,7 +212,7 @@ export function createProgram(): Command {
         return;
       }
 
-      const configPath = process.env.DEVFLOW_CONFIG || DEFAULT_CONFIG_PATH;
+      const configPath = GLOBAL_FBLOOM_CONFIG;
       let config: AppConfig = loadConfig();
 
       if (opts.setAgent) {
@@ -366,7 +230,6 @@ export function createProgram(): Command {
 
   // Default action: auto-detect .fbloom/ and launch Chat TUI
   program.action(() => {
-    const store = createStore();
     const cwd = process.cwd();
 
     // Resolve AI config: global ~/.fbloom/config.json → project .fbloom/config.json
@@ -380,32 +243,25 @@ export function createProgram(): Command {
     let initialProject: Project | undefined;
 
     // Auto-detect: check if .fbloom/ exists in cwd
-    const fs = new FileStore(cwd, false);
-    if (fs.exists()) {
-      // Try to find existing project by path
-      let project = store.getProjectByPath(cwd);
-      if (!project) {
-        // Import from .fbloom/ files
-        const data = fs.scanForImport();
-        project = store.createProject({
-          name: data.name,
-          description: "",
-          project_path: cwd,
-          goal: data.goal,
-        });
-        // Set phase statuses based on file presence
-        for (const [phase, status] of Object.entries(data.phaseStatuses)) {
-          if (status === "done") {
-            store.setPhaseState(project.id, phase as ProjectPhase, "done");
-          }
-        }
-        store.updateProject(project.id, { current_phase: data.currentPhase as ProjectPhase });
-        project = store.getProject(project.id);
-      }
-      initialProject = project ?? undefined;
+    const fileStore = new FileStore(cwd, config.deploy?.verifyBuild !== false);
+    if (fileStore.exists()) {
+      // Ensure state.json exists (rebuild if needed)
+      const state = fileStore.getOrCreateState();
+      const goal = fileStore.readGoal();
+      initialProject = {
+        name: state.name,
+        description: "",
+        current_phase: state.current_phase,
+        status: state.status,
+        project_path: fileStore.getProjectPath(),
+        goal,
+        created_at: state.created_at,
+        updated_at: state.updated_at,
+        completed_at: state.completed_at ?? null,
+      };
     }
 
-    startChatTUI(store, config, agent, initialProject);
+    startChatTUI(fileStore, config, agent, initialProject);
   });
 
   return program;

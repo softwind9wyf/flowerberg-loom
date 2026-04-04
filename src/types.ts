@@ -6,9 +6,11 @@ export type {
   ProjectPhase,
   ProjectStatus,
   PhaseInteraction,
+  ProjectState,
+  PhaseStateInfo,
   Project,
-  PhaseStateStatus,
   PhaseState,
+  PhaseStateStatus,
 } from "./types/project.js";
 
 export {
@@ -18,7 +20,7 @@ export {
 
 // Spec types
 export type {
-  SpecDocument,
+  SpecInfo,
   SpecStatus,
 } from "./types/spec.js";
 

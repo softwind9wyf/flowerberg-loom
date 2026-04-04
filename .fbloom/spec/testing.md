@@ -11,7 +11,7 @@ module: testing
 ### Store Tests (src/store/__tests__/)
 
 - **file-store.test.ts**: Frontmatter parsing, goal/spec/plan read/write, plan checkbox parsing, git auto-commit
-- **Session store tests**: SQLite CRUD operations, schema migrations, phase state transitions, project logging
+- **Session store tests**: Session CRUD operations, message compression, schema handling
 
 ### Orchestrator Tests (src/orchestrator/__tests__/)
 
@@ -23,13 +23,14 @@ module: testing
 ### Unit Tests
 - **Framework**: Vitest
 - **Strategy**: Mock external dependencies (execCommand, agent, git)
-- **Database**: In-memory SQLite (`:memory:`) for store tests
 - **FileStore**: Temporary directories (`os.tmpdir()`) for file tests
+- **state.json**: Test reconstruction from file presence, phase state tracking
 
 ### Integration Tests
-- Store + orchestrator interaction
+- FileStore + orchestrator interaction
 - Full phase lifecycle with mocked agent
 - Configuration loading and validation
+- State reconstruction from `.fbloom/` files (scanForImport)
 
 ### Not Yet Tested
 - TUI components (Ink/React rendering)
@@ -50,9 +51,9 @@ npm run test:watch # Run tests in watch mode
 | Module | What to Test |
 |--------|-------------|
 | agents | Agent availability check, prompt construction, streaming, error handling |
-| store/file-store | Frontmatter parse/serialize, CRUD operations, git integration |
-| store/session-store | Migrations, CRUD, query filters |
-| orchestrator/state-machine | Phase transitions, input handling, state persistence |
+| store/file-store | Frontmatter parse/serialize, CRUD operations, state.json read/write, git integration |
+| store/session-store | Session CRUD, message compression, JSON serialization |
+| orchestrator/state-machine | Phase transitions, input handling, state persistence in state.json |
 | orchestrator/phase-handlers | Each handler's execute/input flow |
 | tui/commands | Command registration, routing, argument parsing |
 | cli | Subcommand definitions, config loading |
