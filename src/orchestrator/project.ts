@@ -6,6 +6,7 @@ import type { ProjectEvent } from "../types/events.js";
 import type { AgentInterface } from "../types/agent.js";
 import { AgentFactory } from "../agents/factory.js";
 import { PhaseStateMachine } from "./state-machine.js";
+import { FileStore } from "../store/file-store.js";
 import {
   GoalPhaseHandler,
   SpecPhaseHandler,
@@ -233,6 +234,7 @@ export class ProjectOrchestrator extends EventEmitter {
         projectPath: this.getWorktreePath(projectId),
         goal: project.goal,
         store: this.store,
+        fileStore: new FileStore(project.project_path, this.config.deploy?.verifyBuild !== false),
         agent,
         config: this.config,
         getPhaseOutput: (p: ProjectPhase) => {

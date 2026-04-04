@@ -88,10 +88,15 @@ CREATE TABLE IF NOT EXISTS project_logs (
 CREATE INDEX IF NOT EXISTS idx_project_logs_project ON project_logs(project_id, created_at DESC);
 `;
 
+const MIGRATION_004 = `
+ALTER TABLE projects ADD COLUMN data_mode TEXT NOT NULL DEFAULT 'file';
+`;
+
 const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: MIGRATION_001 },
   { version: 2, sql: MIGRATION_002 },
   { version: 3, sql: MIGRATION_003 },
+  { version: 4, sql: MIGRATION_004 },
 ];
 
 export class Store {
@@ -150,6 +155,7 @@ export class Store {
       project_path: data.project_path,
       goal: data.goal ?? null,
       goal_metadata: data.goal_metadata ?? null,
+      data_mode: "file",
       created_at: now,
       updated_at: now,
       completed_at: null,
@@ -168,7 +174,7 @@ export class Store {
     return this.db.prepare("SELECT * FROM projects ORDER BY created_at DESC").all() as Project[];
   }
 
-  updateProject(id: string, data: Partial<Pick<Project, "name" | "description" | "current_phase" | "status" | "goal" | "goal_metadata" | "completed_at">>): void {
+  updateProject(id: string, data: Partial<Pick<Project, "name" | "description" | "current_phase" | "status" | "goal" | "goal_metadata" | "completed_at" | "data_mode">>): void {
     const sets: string[] = [];
     const values: unknown[] = [];
     for (const [key, value] of Object.entries(data)) {
@@ -396,4 +402,82 @@ export class Store {
   close(): void {
     this.db.close();
   }
+
+  // --- Migration helpers ---
+
+  migrateProjectData(projectId: string, projectPath: string): void {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project ${projectId} not found`);
+
+    // Import FileStore lazily to avoid circular deps at module level
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { FileStore } = require("../store/file-store.js") as { FileStore: typeof import("../store/file-store.js").FileStore };
+    const fs = new FileStore(projectPath, false);
+
+    // 1. Goal
+    if (project.goal) {
+      fs.writeGoal(project.goal);
+    }
+
+    // 2. Spec
+    const spec = this.getLatestSpec(projectId);
+    if (spec) {
+      const modules = splitSpecTextIntoModules(spec.content);
+      const moduleNames: string[] = [];
+      for (const [name, content] of modules) {
+        fs.writeSpecModule(name, content);
+        moduleNames.push(name);
+      }
+      fs.writeSpecIndex(moduleNames);
+      fs.commitSpec();
+    }
+
+    // 3. Plan
+    const steps = this.getPlanSteps(projectId);
+    if (steps.length > 0) {
+      const byPhase = new Map<string, Array<{ title: string; description: string; status: string }>>();
+      for (const step of steps) {
+        const list = byPhase.get(step.phase) ?? [];
+        list.push({ title: step.title, description: step.description, status: step.status });
+        byPhase.set(step.phase, list);
+      }
+      const lines: string[] = ["# Plan", ""];
+      for (const [phase, items] of byPhase) {
+        lines.push(`## ${phase.charAt(0).toUpperCase() + phase.slice(1)}`);
+        for (const item of items) {
+          const check = item.status === "done" ? "[x]" : "[ ]";
+          lines.push(`- ${check} ${item.title}`);
+          lines.push(`  ${item.description}`);
+        }
+        lines.push("");
+      }
+      fs.writePlanRaw(lines.join("\n"));
+    }
+
+    // Mark migrated
+    this.updateProject(projectId, { data_mode: "file" } as unknown as Partial<Pick<Project, "data_mode">>);
+  }
+}
+
+// Helper: split spec text by ## headings into named modules
+function splitSpecTextIntoModules(text: string): [string, string][] {
+  const modules: [string, string][] = [];
+  const parts = text.split(/^(?=##\s+)/m);
+
+  for (const part of parts) {
+    const headingMatch = part.match(/^##\s+(.+)/);
+    if (headingMatch) {
+      const title = headingMatch[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const content = part.replace(/^##\s+.+\n?/, "").trim();
+      if (title && content) {
+        modules.push([`${title}.md`, content]);
+      }
+    }
+  }
+
+  if (modules.length === 0 && text.trim()) {
+    modules.push(["overview.md", text.trim()]);
+  }
+
+  return modules;
 }

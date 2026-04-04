@@ -35,6 +35,7 @@ function createCtx(overrides?: Partial<PhaseHandlerContext>): PhaseHandlerContex
     projectPath: "/tmp/project",
     goal: "Build a CLI tool",
     store,
+    fileStore: null,
     agent: { run: vi.fn(), decompose: vi.fn() } as unknown as PhaseHandlerContext["agent"],
     config: {
       default_agent: { type: "claude-cli", path: "claude" },

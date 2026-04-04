@@ -238,6 +238,32 @@ export function createProgram(): Command {
       }
     });
 
+  // ---- Migrate ----
+
+  program
+    .command("migrate")
+    .description("Migrate project data from SQLite to file-based storage")
+    .argument("<projectId>", "Project ID (or unique prefix)")
+    .action((projectId: string) => {
+      const store = createStore();
+
+      try {
+        const project = store.listProjects().find((p) => p.id.startsWith(projectId));
+        if (!project) {
+          console.error(`Project not found: ${projectId}`);
+          process.exit(1);
+        }
+
+        store.migrateProjectData(project.id, project.project_path);
+        console.log(`Migrated project "${project.name}" to file-based storage (.fbloom/)`);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      } finally {
+        store.close();
+      }
+    });
+
   // ---- Dashboard (TUI) ----
 
   program

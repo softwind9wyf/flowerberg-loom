@@ -5,6 +5,7 @@ import type { AgentInterface } from "../types/agent.js";
 import type { AppConfig, DeployConfig } from "../types/config.js";
 import type { ProjectEvent } from "../types/events.js";
 import type { Store } from "../store/index.js";
+import type { FileStore } from "../store/file-store.js";
 import type { PhaseResult } from "./state-machine.js";
 import { execCommand } from "./exec.js";
 import {
@@ -17,6 +18,7 @@ export interface PhaseHandlerContext {
   projectPath: string;
   goal: string | null;
   store: Store;
+  fileStore: FileStore | null;
   agent: AgentInterface;
   config: AppConfig;
   getPhaseOutput: (phase: ProjectPhase) => string | null;
@@ -69,6 +71,18 @@ export class SpecPhaseHandler implements PhaseHandler {
       content: result.output,
       ai_generated: true,
     });
+
+    // Also write to FileStore if available
+    if (ctx.fileStore) {
+      const modules = splitSpecIntoModules(result.output);
+      const moduleNames: string[] = [];
+      for (const [name, content] of modules) {
+        ctx.fileStore.writeSpecModule(name, content);
+        moduleNames.push(name);
+      }
+      ctx.fileStore.writeSpecIndex(moduleNames);
+      ctx.fileStore.commitSpec();
+    }
 
     return {
       success: true,
@@ -130,6 +144,12 @@ export class PlanPhaseHandler implements PhaseHandler {
         depends_on: deps,
       });
       createdIds.push(created.id);
+    }
+
+    // Also write to FileStore if available
+    if (ctx.fileStore) {
+      const planMd = buildPlanMarkdown(steps);
+      ctx.fileStore.writePlanRaw(planMd);
     }
 
     return { success: true, output: `Created ${steps.length} plan steps` };
@@ -313,6 +333,51 @@ export class DeployPhaseHandler implements PhaseHandler {
       : `Deployed to ${remote}/${branch}`;
     return { success: true, output };
   }
+}
+
+// ---- Helper: split spec text into modules by ## headings ----
+function splitSpecIntoModules(text: string): [string, string][] {
+  const modules: [string, string][] = [];
+  const parts = text.split(/^(?=##\s+)/m);
+
+  for (const part of parts) {
+    const headingMatch = part.match(/^##\s+(.+)/);
+    if (headingMatch) {
+      const title = headingMatch[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const content = part.replace(/^##\s+.+\n?/, "").trim();
+      if (title && content) {
+        modules.push([`${title}.md`, content]);
+      }
+    }
+  }
+
+  // If no ## headings found, treat entire text as "overview"
+  if (modules.length === 0 && text.trim()) {
+    modules.push(["overview.md", text.trim()]);
+  }
+
+  return modules;
+}
+
+// ---- Helper: build plan markdown from step data ----
+function buildPlanMarkdown(steps: Array<{ phase: string; title: string; description: string }>): string {
+  const byPhase = new Map<string, Array<{ title: string; description: string }>>();
+  for (const step of steps) {
+    const list = byPhase.get(step.phase) ?? [];
+    list.push({ title: step.title, description: step.description });
+    byPhase.set(step.phase, list);
+  }
+
+  const lines: string[] = ["# Plan", ""];
+  for (const [phase, items] of byPhase) {
+    lines.push(`## ${phase.charAt(0).toUpperCase() + phase.slice(1)}`);
+    for (const item of items) {
+      lines.push(`- [ ] ${item.title}`);
+      lines.push(`  ${item.description}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
 }
 
 // ---- Helper: execute autonomous phase (dev/test/review) ----

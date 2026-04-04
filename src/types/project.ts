@@ -45,6 +45,7 @@ export interface Project {
   project_path: string;
   goal: string | null;
   goal_metadata: string | null;
+  data_mode: string;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
