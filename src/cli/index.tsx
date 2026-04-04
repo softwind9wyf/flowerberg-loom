@@ -97,23 +97,30 @@ export function createProgram(): Command {
 
   program
     .command("init")
-    .description("Create a new project")
-    .argument("<name>", "Project name")
-    .option("-p, --path <path>", "Project directory", process.cwd())
+    .description("Create a new project in the given directory")
+    .argument("<path>", "Project directory (use . for current dir)")
     .option("-d, --description <desc>", "Project description", "")
-    .action((name: string, opts: { path: string; description: string }) => {
+    .action((targetPath: string, opts: { description: string }) => {
+      const projectPath = resolve(targetPath);
+      const name = projectPath.split("/").pop() || "untitled";
+
+      // Create directory if it doesn't exist
+      if (!existsSync(projectPath)) {
+        mkdirSync(projectPath, { recursive: true });
+      }
+
       const store = createStore();
       const config = loadConfig();
       const orchestrator = new ProjectOrchestrator(config, store);
 
       try {
-        const project = orchestrator.createProject(name, resolve(opts.path), opts.description);
+        const project = orchestrator.createProject(name, projectPath, opts.description);
         console.log(`Project created: ${project.name} (id: ${project.id})`);
         console.log(`Path: ${project.project_path}`);
 
         // Install fbloom skills to .claude/commands/
         try {
-          const skillResult = installSkills(resolve(opts.path));
+          const skillResult = installSkills(projectPath);
           if (skillResult.installed.length > 0) {
             console.log(`\nSkills installed (${skillResult.installed.length}):`);
             for (const f of skillResult.installed) {
