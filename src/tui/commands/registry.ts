@@ -73,11 +73,11 @@ export function createRegistry(): SlashCommandRegistry {
     description: "Show available commands",
     usage: "/help",
     handler: async (ctx) => {
-      const lines = ["Available commands:", ""];
+      const lines = ["Available commands:"];
       for (const cmd of registry.list()) {
         lines.push(`  ${cmd.usage.padEnd(30)} ${cmd.description}`);
       }
-      lines.push("", "Non-/ text is sent to the AI agent as free conversation.");
+      lines.push("Non-/ text is sent to the AI agent as free conversation.");
       ctx.addMessage({ role: "system", content: lines.join("\n"), timestamp: new Date().toISOString() });
     },
   });
@@ -109,7 +109,7 @@ export function createRegistry(): SlashCommandRegistry {
         lines.push(`  ${icon} ${ps.phase}: ${ps.status}`);
       }
       if (progress && progress.total > 0) {
-        lines.push("", `Plan: ${progress.done}/${progress.total} steps completed`);
+        lines.push(`Plan: ${progress.done}/${progress.total} steps completed`);
       }
       ctx.addMessage({ role: "system", content: lines.join("\n"), timestamp: new Date().toISOString() });
     },
@@ -288,11 +288,11 @@ export function createRegistry(): SlashCommandRegistry {
           }
           ctx.fileStore.writeSpecIndex(moduleNames);
 
-          const lines = ["Specs generated:", ""];
+          const lines = ["Specs generated:"];
           for (const name of moduleNames) {
             lines.push(`  ✓ ${name}`);
           }
-          lines.push("", `Total: ${moduleNames.length} modules`);
+          lines.push(`Total: ${moduleNames.length} modules`);
           lines.push("Use /spec to list, /spec <module> to view, /spec chat <module> to discuss.");
           ctx.addMessage({ role: "system", content: lines.join("\n"), timestamp: new Date().toISOString() });
         } catch (parseErr) {
@@ -351,11 +351,11 @@ export function createRegistry(): SlashCommandRegistry {
         ctx.addMessage({ role: "system", content: "No spec generated yet. Use /spec generate to create from goal, or /goal chat to set a goal first.", timestamp: new Date().toISOString() });
         return;
       }
-      const lines = ["Spec modules:", ""];
+      const lines = ["Spec modules:"];
       for (const m of modules) {
         lines.push(`  ${m}`);
       }
-      lines.push("", "Use /spec <module> to view, /spec chat <module> to discuss with AI.");
+      lines.push("Use /spec <module> to view, /spec chat <module> to discuss with AI.");
       ctx.addMessage({ role: "system", content: lines.join("\n"), timestamp: new Date().toISOString() });
     },
   });

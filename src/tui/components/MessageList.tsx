@@ -45,15 +45,31 @@ function renderMessage(msg: ChatMessage, contentWidth: number): RenderedMessage 
 
   if (msg.role === "system") {
     const wrapped = wrapLines(msg.content, contentWidth - time.length - 3);
-    for (const line of wrapped) {
-      lines.push({ text: `[${time}] `, dimColor: true });
-      lines.push({ text: line, dimColor: true });
+    const prefix = " ".repeat(time.length + 3);
+    for (let i = 0; i < wrapped.length; i++) {
+      const lineText = wrapped[i];
+      if (i === 0) {
+        lines.push({ text: `[${time}] ${lineText}`, dimColor: true });
+      } else if (lineText === "") {
+        lines.push({ text: "" }); // empty line, no prefix
+      } else {
+        lines.push({ text: `${prefix}${lineText}`, dimColor: true });
+      }
     }
   } else if (msg.role === "user") {
     const wrapped = wrapLines(msg.content, contentWidth - time.length - 3);
-    for (const line of wrapped) {
-      lines.push({ text: `[${time}] `, dimColor: true });
-      lines.push({ text: line, color: "green" });
+    const prefix = " ".repeat(time.length + 3);
+    for (let i = 0; i < wrapped.length; i++) {
+      const lineText = wrapped[i];
+      if (i === 0) {
+        lines.push({ text: `[${time}] `, dimColor: true });
+        lines.push({ text: lineText, color: "green" });
+      } else if (lineText === "") {
+        lines.push({ text: "" });
+      } else {
+        lines.push({ text: `${prefix}`, dimColor: true });
+        lines.push({ text: lineText, color: "green" });
+      }
     }
   } else {
     // assistant
