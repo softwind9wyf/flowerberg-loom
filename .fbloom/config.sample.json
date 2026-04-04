@@ -1,0 +1,24 @@
+{
+  "default_agent": {
+    "type": "claude-cli",
+    "path": "claude"
+  },
+  "agents": [],
+  "max_parallel_agents": 3,
+  "default_max_retries": 3,
+  "deploy": {
+    "remote": "origin",
+    "branch": "main",
+    "createRelease": true,
+    "tagPrefix": "v",
+    "buildCommand": "npm run build",
+    "verifyBuild": true
+  },
+  "ai": {
+    "api_format": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "api_key": "YOUR_API_KEY_HERE",
+    "model": "claude-sonnet-4-6",
+    "provider": "anthropic"
+  }
+}

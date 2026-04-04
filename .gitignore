@@ -4,3 +4,4 @@ dist/
 *.db-journal
 .env
 config/local.json
+.fbloom/config.json
